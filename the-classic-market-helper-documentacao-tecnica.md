@@ -671,6 +671,24 @@ const parseMarketItemsFromDoc = (doc) => {
 };
 ```
 
+Implementação atual:
+
+- `extractLinkedItemsFromHTML(html)` lê links de `/panel/market-analysis?...item_id=...`;
+- o nome vem preferencialmente do `aria-label` do link ou do `.fw-semibold` próximo;
+- `extractItemIconFromHTML(html, itemId)` procura `img[src*="/icon.../{item_id}.png"]`;
+- cada item relacionado pode carregar `{ item_id, item_name, iconUrl, averagePrice, url }`;
+- `iconUrl` é preservado quando a busca textual encontra um resultado e a extensão refaz a busca por `item_id`.
+
+Exemplo de extração de ícone:
+
+```js
+const extractItemIconFromHTML = (html, itemId) => {
+  const pattern = new RegExp(`<img[^>]+src="([^"]*/icon[^"/]*/${itemId}\\.(?:png|webp|jpg|jpeg)[^"]*)"`, 'i');
+  const match = String(html || '').match(pattern);
+  return match?.[1] || '';
+};
+```
+
 ## 19. Extração do item atual
 
 Prioridade de leitura:
@@ -862,6 +880,43 @@ Estrutura sugerida:
 }
 ```
 
+Modelo usado pela implementação atual:
+
+```json
+{
+  "pinned": [
+    {
+      "game": "pw126",
+      "q": "PEDRA",
+      "item_id": "11208",
+      "item_name": "Pedra Imortal",
+      "iconUrl": "https://theclassic.games/assets/img/iconpw126/11208.png",
+      "start_date": "26/04/2026",
+      "end_date": "26/05/2026",
+      "createdAt": 1779830000000,
+      "updatedAt": 1779830000000,
+      "lastRefreshAt": 1779830000000,
+      "lastRefreshOk": true
+    }
+  ],
+  "history": [],
+  "snapshots": {
+    "pw126:11208": {
+      "ok": true,
+      "itemKey": "pw126:11208",
+      "itemName": "Pedra Imortal",
+      "iconUrl": "https://theclassic.games/assets/img/iconpw126/11208.png",
+      "capturedAt": 1779830000000,
+      "metrics": {},
+      "stats": {},
+      "relatedItems": []
+    }
+  }
+}
+```
+
+Regra importante: `itemName` e `iconUrl` extraídos do HTML têm prioridade sobre o termo digitado pelo usuário. Assim, uma busca por `798` pode aparecer na UI como `Tábua de Qualidade` com o ícone correto.
+
 ## 23. Chave única do item
 
 Usar `game:item_id`.
@@ -985,6 +1040,7 @@ Logs técnicos
 Cards por item:
 
 ```txt
+Ícone do item
 Nome do item
 ID do item
 Último dia
@@ -997,6 +1053,15 @@ Variação no período
 Última atualização
 Status da última busca
 ```
+
+Comportamento implementado na dashboard:
+
+- o resumo do item principal mostra avatar/ícone, nome real, ID, período e data do snapshot;
+- itens monitorados na sidebar mostram ícone, nome e última média;
+- itens relacionados da busca também mostram ícone quando `iconUrl` foi capturado;
+- itens ainda não fixados exibem o botão `Salvar item`;
+- ao salvar, a dashboard envia `PIN_ITEM` com o item normalizado e o snapshot atual;
+- depois de salvo, o botão muda para `Salvo` e o item aparece em `Monitorados`.
 
 ## 27. Painel flutuante na página
 
@@ -1083,6 +1148,7 @@ q
 category
 tags
 snapshot.itemName
+snapshot.iconUrl
 ```
 
 Exemplo:
@@ -1113,6 +1179,7 @@ Implementação atual:
 - se o termo for numérico, é tratado como `item_id`;
 - se o termo for texto, é tratado como `q`;
 - o item buscado é salvo no histórico via `UPSERT_HISTORY`.
+- o item pesquisado pode ser fixado na dashboard pelo botão `Salvar item`.
 
 Normalização do termo:
 
@@ -1189,8 +1256,10 @@ Fluxo implementado para busca direta por nome:
 3. Ler relatedItems/resultados capturados do HTML.
 4. Se houver resultado compatível, criar novo item com item_id real.
 5. Fazer REFRESH_ITEM novamente usando item_id.
-6. Salvar snapshot e item normalizado no histórico.
-7. Selecionar o item na dashboard ou navegar o card flutuante para a URL real.
+6. Normalizar `item_id`, `item_name` e `iconUrl` a partir do snapshot.
+7. Salvar snapshot e item normalizado no histórico.
+8. Selecionar o item na dashboard ou navegar o card flutuante para a URL real.
+9. Se o usuário clicar em `Salvar item`, gravar em `pinned` via `PIN_ITEM`.
 ```
 
 Não usar somente o modo textual para histórico de preço quando houver resultado com `item_id`, porque os dados completos de preço vêm melhor quando há `item_id` selecionado.
@@ -1207,11 +1276,12 @@ const parseMarketAnalysisHtml = (html, sourceUrl) => {
   const currencyRows = extractJsArray(html, 'currencyRows');
   const currentItem = parseCurrentItem(doc, sourceUrl);
   const listedItems = parseMarketItemsFromDoc(doc);
+  const iconUrl = currentItem?.iconUrl || extractItemIconFromHTML(html, currentItem?.itemId);
   const normalizedRows = rows.map(normalizePriceRow).filter((row) => row.date);
   const summary = buildItemSummary(rows);
 
   return {
-    currentItem,
+    currentItem: currentItem ? { ...currentItem, iconUrl } : null,
     listedItems,
     rows: normalizedRows,
     currencyRows,
@@ -1220,6 +1290,19 @@ const parseMarketAnalysisHtml = (html, sourceUrl) => {
     sourceUrl,
   };
 };
+```
+
+No snapshot salvo pela implementação atual, os campos de identidade ficam junto dos dados parseados:
+
+```js
+{
+  itemKey: 'pw126:11208',
+  itemName: 'Pedra Imortal',
+  iconUrl: 'https://theclassic.games/assets/img/iconpw126/11208.png',
+  relatedItems: [
+    { item_id: '798', item_name: 'Tábua de Qualidade', iconUrl: '...', url: '...' }
+  ]
+}
 ```
 
 ## 32. Validações do parser
@@ -1451,6 +1534,8 @@ A extensão está correta quando:
 - fixa item atual;
 - busca item por ID ou nome pela dashboard;
 - busca item por ID ou nome pelo painel flutuante;
+- exibe nome real e ícone do item quando o HTML fornece esses dados;
+- permite salvar item pesquisado em Monitorados sem precisar buscar novamente;
 - monitora item por `game:item_id`;
 - busca HTML em background com sessão ativa;
 - extrai `rows` e `currencyRows` quando disponíveis;
