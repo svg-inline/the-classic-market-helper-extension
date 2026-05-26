@@ -1,8 +1,10 @@
 'use strict';
 
 const ALARM_NAME = 'tcmh-refresh-prices';
+const REFRESH_QUEUE_ALARM_NAME = 'tcmh-refresh-queue';
 const FETCH_THROTTLE_MIN_MS = 30 * 1000;
 const FETCH_THROTTLE_MAX_MS = 60 * 1000;
+const FETCH_TIMEOUT_MS = 90 * 1000;
 let nextFetchAllowedAt = 0;
 let fetchThrottleQueue = Promise.resolve();
 
@@ -49,6 +51,16 @@ const storageSet = (payload) => new Promise((resolve) => {
   chrome.storage.local.set(payload, () => resolve());
 });
 
+const broadcastMessage = (payload) => {
+  try {
+    chrome.runtime.sendMessage(payload, () => {
+      void chrome.runtime.lastError;
+    });
+  } catch (_error) {
+    // There may be no dashboard/popup currently listening.
+  }
+};
+
 const sleep = (delayMs) => new Promise((resolve) => {
   setTimeout(resolve, delayMs);
 });
@@ -58,10 +70,13 @@ const randomFetchThrottleMs = () => {
   return FETCH_THROTTLE_MIN_MS + Math.round(Math.random() * range);
 };
 
-const waitForFetchThrottle = async () => {
-  const waitMs = Math.max(0, nextFetchAllowedAt - Date.now());
+const getFetchThrottleWaitMs = () => Math.max(0, nextFetchAllowedAt - Date.now());
+
+const waitForFetchThrottle = async (onWait = null) => {
+  const waitMs = getFetchThrottleWaitMs();
 
   if (waitMs > 0) {
+    onWait?.(waitMs);
     await sleep(waitMs);
   }
 };
@@ -70,9 +85,10 @@ const markNextFetchThrottle = () => {
   nextFetchAllowedAt = Date.now() + randomFetchThrottleMs();
 };
 
-const runWithFetchThrottle = (task) => {
+const runWithFetchThrottle = (task, options = {}) => {
   const throttledTask = fetchThrottleQueue.then(async () => {
-    await waitForFetchThrottle();
+    await waitForFetchThrottle(options.onWait);
+    options.onStart?.();
 
     try {
       return await task();
@@ -83,6 +99,12 @@ const runWithFetchThrottle = (task) => {
 
   fetchThrottleQueue = throttledTask.catch(() => {});
   return throttledTask;
+};
+
+const scheduleRefreshQueueAlarm = async (delayMs = 0) => {
+  await chrome.alarms.create(REFRESH_QUEUE_ALARM_NAME, {
+    delayInMinutes: Math.max(0.01, delayMs / 60000)
+  });
 };
 
 const getState = async () => {
@@ -517,6 +539,18 @@ const notify = async (title, message) => {
 
 const makeId = () => `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
+const itemDisplayName = (item) => item?.item_name || item?.q || item?.item_id || slugKey(item || {});
+
+const emitRefreshProgress = (payload) => {
+  broadcastMessage({
+    type: 'REFRESH_PROGRESS',
+    progress: {
+      timestamp: Date.now(),
+      ...payload
+    }
+  });
+};
+
 const ALERT_CONDITIONS = Object.freeze({
   avg_above: { label: 'Última média acima', metric: 'latestAvg', op: '>=' },
   avg_below: { label: 'Última média abaixo', metric: 'latestAvg', op: '<=' },
@@ -606,48 +640,121 @@ const evaluateAlerts = async (state, snapshots, touchedKeys = null) => {
   return changed ? nextAlerts : alerts;
 };
 
-const fetchSnapshotForItem = async (item, settings) => {
+const fetchSnapshotForItemNow = async (item, settings) => {
   const itemKey = slugKey(item);
   const url = buildMarketUrl(item, settings);
 
-  return runWithFetchThrottle(async () => {
+  const controller = new AbortController();
+  let timeoutId = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`Timeout após ${Math.round(FETCH_TIMEOUT_MS / 1000)}s buscando ${itemDisplayName(item)}.`));
+    }, FETCH_TIMEOUT_MS);
+  });
+
+  const fetchPromise = (async () => {
     const response = await fetch(url, {
       method: 'GET',
       credentials: 'include',
       cache: 'no-store',
-      redirect: 'follow'
+      redirect: 'follow',
+      signal: controller.signal
     });
 
     const html = await response.text();
-    const snapshot = parseSnapshotFromHTML(html, {
-      url: response.url || url,
-      itemKey,
-      itemName: item.item_name || item.q || item.item_id || itemKey,
-      iconUrl: item.iconUrl || ''
-    });
+    return { response, html };
+  })();
 
-    snapshot.httpStatus = response.status;
-    snapshot.finalUrl = response.url || url;
+  let response;
+  let html;
 
-    if (!response.ok) {
-      snapshot.ok = false;
-      snapshot.error = `HTTP ${response.status}`;
-    }
-
-    if (snapshot.finalUrl && !snapshot.finalUrl.includes('/panel/market-analysis')) {
-      snapshot.ok = false;
-      snapshot.loginRequired = true;
-      snapshot.error = 'Sessão expirada ou redirecionada para fora da análise de mercado.';
-    }
-
-    return snapshot;
+  try {
+    ({ response, html } = await Promise.race([fetchPromise, timeoutPromise]));
+  } finally {
+    clearTimeout(timeoutId);
+  }
+  const snapshot = parseSnapshotFromHTML(html, {
+    url: response.url || url,
+    itemKey,
+    itemName: item.item_name || item.q || item.item_id || itemKey,
+    iconUrl: item.iconUrl || ''
   });
+
+  snapshot.httpStatus = response.status;
+  snapshot.finalUrl = response.url || url;
+
+  if (!response.ok) {
+    snapshot.ok = false;
+    snapshot.error = `HTTP ${response.status}`;
+  }
+
+  if (snapshot.finalUrl && !snapshot.finalUrl.includes('/panel/market-analysis')) {
+    snapshot.ok = false;
+    snapshot.loginRequired = true;
+    snapshot.error = 'Sessão expirada ou redirecionada para fora da análise de mercado.';
+  }
+
+  return snapshot;
+};
+
+const fetchSnapshotForItem = async (item, settings, progress = null) => {
+  const progressOptions = progress ? {
+    onWait: (waitMs) => emitRefreshProgress({
+      ...progress,
+      phase: 'running',
+      message: `Aguardando ${Math.ceil(waitMs / 1000)}s para atualizar ${progress.itemName || itemDisplayName(item)}`
+    }),
+    onStart: () => emitRefreshProgress({
+      ...progress,
+      phase: 'running',
+      message: progress.message || `Atualizando ${progress.itemName || itemDisplayName(item)}`
+    })
+  } : {};
+
+  return runWithFetchThrottle(() => fetchSnapshotForItemNow(item, settings), progressOptions);
 };
 
 const refreshItem = async (item) => {
   const state = await getState();
-  const snapshot = await fetchSnapshotForItem(item, state.settings);
   const itemKey = slugKey(item);
+  const itemName = itemDisplayName(item);
+
+  emitRefreshProgress({
+    phase: 'running',
+    scope: 'item',
+    itemKey,
+    itemName,
+    index: 1,
+    total: 1,
+    message: `Atualizando ${itemName}`
+  });
+
+  let snapshot;
+
+  try {
+    snapshot = await fetchSnapshotForItem(item, state.settings, {
+      scope: 'item',
+      itemKey,
+      itemName,
+      index: 1,
+      total: 1,
+      message: `Atualizando ${itemName}`
+    });
+  } catch (error) {
+    emitRefreshProgress({
+      phase: 'error',
+      scope: 'item',
+      itemKey,
+      itemName,
+      index: 1,
+      total: 1,
+      message: `${itemName}: erro`,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
+  }
+
   const snapshots = {
     ...state.snapshots,
     [itemKey]: snapshot
@@ -672,6 +779,17 @@ const refreshItem = async (item) => {
     lastRefreshStatus: snapshot.ok ? 'ok' : 'error'
   });
 
+  emitRefreshProgress({
+    phase: snapshot.ok ? 'success' : 'error',
+    scope: 'item',
+    itemKey,
+    itemName: snapshot.itemName || itemName,
+    index: 1,
+    total: 1,
+    message: `${snapshot.itemName || itemName}: ${snapshot.ok ? 'atualizado' : 'erro'}`,
+    error: snapshot.ok ? '' : snapshot.error || 'Falha ao atualizar item.'
+  });
+
   return snapshot;
 };
 
@@ -691,17 +809,54 @@ const refreshAllPinned = async () => {
   let success = 0;
   let failed = 0;
 
-  for (const item of pinned) {
+  for (const [index, item] of pinned.entries()) {
     const key = slugKey(item);
+    const itemName = itemDisplayName(item);
+
+    emitRefreshProgress({
+      phase: 'running',
+      scope: 'all',
+      itemKey: key,
+      itemName,
+      index: index + 1,
+      total: pinned.length,
+      message: `Atualizando ${index + 1}/${pinned.length}: ${itemName}`
+    });
 
     try {
-      const snapshot = await fetchSnapshotForItem(item, state.settings);
+      const snapshot = await fetchSnapshotForItem(item, state.settings, {
+        scope: 'all',
+        itemKey: key,
+        itemName,
+        index: index + 1,
+        total: pinned.length,
+        message: `Atualizando ${index + 1}/${pinned.length}: ${itemName}`
+      });
       snapshots[key] = snapshot;
 
       if (snapshot.ok) {
         success += 1;
+        emitRefreshProgress({
+          phase: 'success',
+          scope: 'all',
+          itemKey: key,
+          itemName: snapshot.itemName || itemName,
+          index: index + 1,
+          total: pinned.length,
+          message: `${index + 1}/${pinned.length}: ${snapshot.itemName || itemName} atualizado`
+        });
       } else {
         failed += 1;
+        emitRefreshProgress({
+          phase: 'error',
+          scope: 'all',
+          itemKey: key,
+          itemName: snapshot.itemName || itemName,
+          index: index + 1,
+          total: pinned.length,
+          message: `${index + 1}/${pinned.length}: ${snapshot.itemName || itemName} com erro`,
+          error: snapshot.error || 'Falha ao atualizar item.'
+        });
       }
     } catch (error) {
       failed += 1;
@@ -717,6 +872,16 @@ const refreshAllPinned = async () => {
         parserSource: 'error',
         error: error instanceof Error ? error.message : String(error)
       };
+      emitRefreshProgress({
+        phase: 'error',
+        scope: 'all',
+        itemKey: key,
+        itemName,
+        index: index + 1,
+        total: pinned.length,
+        message: `${index + 1}/${pinned.length}: ${itemName} com erro`,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   }
 
@@ -749,6 +914,17 @@ const refreshAllPinned = async () => {
     await notify('The Classic Market Helper', `${success} item(ns) atualizado(s).`);
   }
 
+  emitRefreshProgress({
+    phase: failed ? 'error' : 'complete',
+    scope: 'all',
+    itemKey: '',
+    itemName: '',
+    index: pinned.length,
+    total: pinned.length,
+    message: `Atualização concluída: ${success} ok, ${failed} erro(s).`,
+    error: failed ? `${failed} item(ns) com erro.` : ''
+  });
+
   return {
     ok: failed === 0,
     total: pinned.length,
@@ -756,6 +932,252 @@ const refreshAllPinned = async () => {
     failed,
     snapshots
   };
+};
+
+const getRefreshJob = async () => {
+  const result = await storageGet('refreshJob');
+  return result.refreshJob && typeof result.refreshJob === 'object' ? result.refreshJob : null;
+};
+
+const saveRefreshJob = (refreshJob) => storageSet({ refreshJob });
+
+const createErrorSnapshot = (item, settings, error) => {
+  const key = slugKey(item);
+  return {
+    ok: false,
+    capturedAt: Date.now(),
+    sourceUrl: buildMarketUrl(item, settings),
+    itemKey: key,
+    itemName: item.item_name || item.q || item.item_id || key,
+    metrics: {},
+    rawTextPreview: '',
+    parserConfidence: 'none',
+    parserSource: 'error',
+    error: error instanceof Error ? error.message : String(error)
+  };
+};
+
+const handleRefreshQueueError = async (error) => {
+  await saveRefreshJob(null);
+  await storageSet({
+    lastRefresh: Date.now(),
+    lastRefreshStatus: 'error'
+  });
+  emitRefreshProgress({
+    phase: 'error',
+    scope: 'all',
+    itemKey: '',
+    itemName: '',
+    index: 0,
+    total: 0,
+    message: 'Falha na fila de atualização.',
+    error: error instanceof Error ? error.message : String(error)
+  });
+};
+
+const processRefreshQueueSoon = () => {
+  setTimeout(() => {
+    processRefreshQueue().catch(handleRefreshQueueError);
+  }, 0);
+};
+
+const startRefreshQueue = async (items, scope = 'all') => {
+  const normalizedItems = Array.isArray(items) ? items.filter(Boolean) : [];
+
+  if (!normalizedItems.length) {
+    emitRefreshProgress({
+      phase: 'complete',
+      scope,
+      itemKey: '',
+      itemName: '',
+      index: 0,
+      total: 0,
+      message: 'Nenhum item para atualizar.'
+    });
+    return { started: false, reason: 'no_items' };
+  }
+
+  const currentJob = await getRefreshJob();
+  const currentJobAgeMs = currentJob?.updatedAt ? Date.now() - Number(currentJob.updatedAt) : 0;
+  if (currentJob?.active && currentJobAgeMs <= 10 * 60 * 1000) {
+    emitRefreshProgress({
+      phase: 'running',
+      scope: currentJob.scope || 'all',
+      itemKey: currentJob.items?.[currentJob.index] ? slugKey(currentJob.items[currentJob.index]) : '',
+      itemName: currentJob.items?.[currentJob.index] ? itemDisplayName(currentJob.items[currentJob.index]) : '',
+      index: Math.min((currentJob.index || 0) + 1, currentJob.total || 1),
+      total: currentJob.total || 1,
+      message: 'Retomando atualização em andamento.'
+    });
+    processRefreshQueueSoon();
+    return { started: true, reason: 'resumed', job: currentJob };
+  }
+
+  const refreshJob = {
+    id: makeId(),
+    active: true,
+    scope,
+    items: normalizedItems,
+    index: 0,
+    total: normalizedItems.length,
+    success: 0,
+    failed: 0,
+    startedAt: Date.now(),
+    updatedAt: Date.now()
+  };
+
+  await saveRefreshJob(refreshJob);
+  await storageSet({ lastRefreshStatus: 'running' });
+  emitRefreshProgress({
+    phase: 'running',
+    scope,
+    itemKey: slugKey(normalizedItems[0]),
+    itemName: itemDisplayName(normalizedItems[0]),
+    index: 1,
+    total: normalizedItems.length,
+    message: `Atualização iniciada: ${normalizedItems.length} item(ns).`
+  });
+  processRefreshQueueSoon();
+
+  return { started: true, job: refreshJob };
+};
+
+const processRefreshQueue = async () => {
+  const job = await getRefreshJob();
+
+  if (!job?.active) {
+    return;
+  }
+
+  const item = job.items?.[job.index];
+  if (!item) {
+    await saveRefreshJob(null);
+    await storageSet({
+      lastRefresh: Date.now(),
+      lastRefreshStatus: job.failed ? 'partial_error' : 'ok'
+    });
+    emitRefreshProgress({
+      phase: job.failed ? 'error' : 'complete',
+      scope: job.scope || 'all',
+      itemKey: '',
+      itemName: '',
+      index: job.total || 0,
+      total: job.total || 0,
+      message: `Atualização concluída: ${job.success || 0} ok, ${job.failed || 0} erro(s).`,
+      error: job.failed ? `${job.failed} item(ns) com erro.` : ''
+    });
+    return;
+  }
+
+  const state = await getState();
+  const key = slugKey(item);
+  const itemName = itemDisplayName(item);
+  const index = Number(job.index || 0) + 1;
+  const total = Number(job.total || job.items.length || 1);
+
+  emitRefreshProgress({
+    phase: 'running',
+    scope: job.scope || 'all',
+    itemKey: key,
+    itemName,
+    index,
+    total,
+    message: total > 1 ? `Atualizando ${index}/${total}: ${itemName}` : `Atualizando ${itemName}`
+  });
+
+  let snapshot;
+  let success = Number(job.success || 0);
+  let failed = Number(job.failed || 0);
+
+  try {
+    snapshot = await fetchSnapshotForItemNow(item, state.settings);
+    if (snapshot.ok) {
+      success += 1;
+    } else {
+      failed += 1;
+    }
+  } catch (error) {
+    failed += 1;
+    snapshot = createErrorSnapshot(item, state.settings, error);
+  }
+
+  const snapshots = {
+    ...state.snapshots,
+    [key]: snapshot
+  };
+  const pinned = state.pinned.map((current) => slugKey(current) === key ? {
+    ...current,
+    item_name: snapshot.itemName || current.item_name,
+    iconUrl: snapshot.iconUrl || current.iconUrl || '',
+    updatedAt: Date.now(),
+    lastRefreshAt: snapshot.capturedAt,
+    lastRefreshOk: Boolean(snapshot.ok)
+  } : current);
+  const alerts = await evaluateAlerts(state, snapshots, [key]);
+
+  await storageSet({
+    snapshots,
+    pinned,
+    alerts,
+    lastRefresh: Date.now(),
+    lastRefreshStatus: snapshot.ok ? 'running' : 'partial_error'
+  });
+
+  emitRefreshProgress({
+    phase: snapshot.ok ? 'success' : 'error',
+    scope: job.scope || 'all',
+    itemKey: key,
+    itemName: snapshot.itemName || itemName,
+    index,
+    total,
+    message: total > 1
+      ? `${index}/${total}: ${snapshot.itemName || itemName} ${snapshot.ok ? 'atualizado' : 'com erro'}`
+      : `${snapshot.itemName || itemName}: ${snapshot.ok ? 'atualizado' : 'erro'}`,
+    error: snapshot.ok ? '' : snapshot.error || 'Falha ao atualizar item.'
+  });
+
+  const nextIndex = index;
+  const nextJob = {
+    ...job,
+    index: nextIndex,
+    success,
+    failed,
+    updatedAt: Date.now()
+  };
+
+  if (nextIndex >= total) {
+    nextJob.active = false;
+    await saveRefreshJob(null);
+    await storageSet({
+      lastRefresh: Date.now(),
+      lastRefreshStatus: failed ? 'partial_error' : 'ok'
+    });
+    emitRefreshProgress({
+      phase: failed ? 'error' : 'complete',
+      scope: job.scope || 'all',
+      itemKey: '',
+      itemName: '',
+      index: total,
+      total,
+      message: `Atualização concluída: ${success} ok, ${failed} erro(s).`,
+      error: failed ? `${failed} item(ns) com erro.` : ''
+    });
+    return;
+  }
+
+  await saveRefreshJob(nextJob);
+  const nextItem = job.items[nextIndex];
+  const delayMs = randomFetchThrottleMs();
+  emitRefreshProgress({
+    phase: 'running',
+    scope: job.scope || 'all',
+    itemKey: slugKey(nextItem),
+    itemName: itemDisplayName(nextItem),
+    index: nextIndex + 1,
+    total,
+    message: `Aguardando ${Math.ceil(delayMs / 1000)}s para atualizar ${itemDisplayName(nextItem)}`
+  });
+  await scheduleRefreshQueueAlarm(delayMs);
 };
 
 const handleMessage = async (message) => {
@@ -831,6 +1253,17 @@ const handleMessage = async (message) => {
 
   if (type === 'REFRESH_ALL') {
     const result = await refreshAllPinned();
+    return { result, state: await getState() };
+  }
+
+  if (type === 'START_REFRESH_ITEM') {
+    const result = await startRefreshQueue([message.item], 'item');
+    return { result, state: await getState() };
+  }
+
+  if (type === 'START_REFRESH_ALL') {
+    const state = await getState();
+    const result = await startRefreshQueue(state.pinned, 'all');
     return { result, state: await getState() };
   }
 
@@ -920,11 +1353,18 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === REFRESH_QUEUE_ALARM_NAME) {
+    processRefreshQueue().catch(handleRefreshQueueError);
+    return;
+  }
+
   if (alarm.name !== ALARM_NAME) {
     return;
   }
 
-  refreshAllPinned().catch(async (error) => {
+  getState()
+    .then((state) => startRefreshQueue(state.pinned, 'all'))
+    .catch(async (error) => {
     await storageSet({
       lastRefresh: Date.now(),
       lastRefreshStatus: 'error'

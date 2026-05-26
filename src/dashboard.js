@@ -18,6 +18,7 @@
   let activeTab = 'monitor';
   let searchValue = '';
   let pipWindow = null;
+  let refreshProgress = null;
 
   const $ = (selector) => document.querySelector(selector);
   const sendMessage = (payload) => new Promise((resolve) => chrome.runtime.sendMessage(payload, (response) => resolve(response || {})));
@@ -35,9 +36,58 @@
     return snapshot?.itemName || item?.item_name || item?.q || item?.item_id || 'Nenhum item selecionado';
   };
 
+  const labelForItem = (item, snapshot = null) => snapshot?.itemName || item?.item_name || item?.q || item?.item_id || itemKey(item || {});
+
   const setText = (id, text) => {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
+  };
+
+  const setRefreshProgress = (progress) => {
+    if (!progress) {
+      refreshProgress = null;
+      renderRefreshHeaderStatus();
+      return;
+    }
+
+    refreshProgress = {
+      timestamp: Date.now(),
+      ...progress
+    };
+    renderRefreshHeaderStatus();
+  };
+
+  const renderRefreshHeaderStatus = () => {
+    const el = $('#refreshHeaderStatus');
+    if (!el) return;
+
+    if (!refreshProgress) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+
+    const phase = ['running', 'success', 'error', 'complete'].includes(refreshProgress.phase) ? refreshProgress.phase : 'running';
+    const prefix = {
+      running: 'Atualizando',
+      success: 'OK',
+      error: 'Erro',
+      complete: 'Concluído'
+    }[phase];
+    const itemPart = refreshProgress.itemName ? ` · ${refreshProgress.itemName}` : '';
+    const countPart = refreshProgress.total > 1 && refreshProgress.index
+      ? ` ${refreshProgress.index}/${refreshProgress.total}`
+      : '';
+    const detail = refreshProgress.error ? ` · ${refreshProgress.error}` : '';
+    const text = `${refreshProgress.message || `${prefix}${countPart}${itemPart}`}${detail}`;
+
+    el.hidden = false;
+    el.className = `topbar-status is-${phase}`;
+    el.title = text;
+    el.innerHTML = `
+      <span class="topbar-status__dot" aria-hidden="true"></span>
+      <span class="topbar-status__text">${TcmhMarket.escapeHTML(text)}</span>
+    `;
   };
 
   const itemMatchesSearch = (item, query) => {
@@ -107,6 +157,15 @@
   const isPinned = (key) => (state?.pinned || []).some((item) => itemKey(item) === key);
 
   const refreshAndStoreItem = async (item) => {
+    setRefreshProgress({
+      phase: 'running',
+      scope: 'item',
+      itemKey: itemKey(item),
+      itemName: labelForItem(item),
+      index: 1,
+      total: 1,
+      message: `Atualizando ${labelForItem(item)}`
+    });
     const refreshResponse = await sendMessage({ type: 'REFRESH_ITEM', item });
     const snapshot = refreshResponse.snapshot || null;
     const normalizedItem = itemFromSnapshot(item, snapshot);
@@ -438,6 +497,7 @@
 
   const render = () => {
     setText('pageTitle', activeTab === 'monitor' ? 'Dashboard full screen' : document.querySelector(`[data-tab="${activeTab}"]`)?.textContent || 'Dashboard');
+    renderRefreshHeaderStatus();
     renderStatus();
     renderSidebar();
     renderSelectedSummary();
@@ -450,18 +510,57 @@
   };
 
   const refreshAll = async () => {
-    const response = await sendMessage({ type: 'REFRESH_ALL' });
+    const total = state?.pinned?.length || 0;
+    setRefreshProgress({
+      phase: 'running',
+      scope: 'all',
+      index: total ? 1 : 0,
+      total,
+      message: total ? `Iniciando atualização de ${total} item(ns)...` : 'Nenhum item fixado para atualizar.'
+    });
+    const response = await sendMessage({ type: 'START_REFRESH_ALL' });
+    if (response.error) {
+      setRefreshProgress({
+        phase: 'error',
+        scope: 'all',
+        index: 0,
+        total,
+        message: 'Falha ao iniciar atualização.',
+        error: response.error
+      });
+      return;
+    }
     state = response.state || state;
-    await load();
     render();
   };
 
   const refreshSelected = async () => {
     const item = getSelectedItem();
     if (!item) return;
-    const response = await sendMessage({ type: 'REFRESH_ITEM', item });
+    setRefreshProgress({
+      phase: 'running',
+      scope: 'item',
+      itemKey: itemKey(item),
+      itemName: labelForItem(item, getSnapshot(itemKey(item))),
+      index: 1,
+      total: 1,
+      message: `Atualizando ${labelForItem(item, getSnapshot(itemKey(item)))}`
+    });
+    const response = await sendMessage({ type: 'START_REFRESH_ITEM', item });
+    if (response.error) {
+      setRefreshProgress({
+        phase: 'error',
+        scope: 'item',
+        itemKey: itemKey(item),
+        itemName: labelForItem(item, getSnapshot(itemKey(item))),
+        index: 1,
+        total: 1,
+        message: 'Falha ao iniciar atualização.',
+        error: response.error
+      });
+      return;
+    }
     state = response.state || state;
-    await load();
     selectedKey = itemKey(item);
     render();
   };
@@ -592,6 +691,19 @@
         setText('dataStatus', `Falha ao importar: ${error.message || String(error)}`);
       } finally {
         event.target.value = '';
+      }
+    });
+
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type !== 'REFRESH_PROGRESS') {
+        return;
+      }
+
+      const progress = message.progress || null;
+      setRefreshProgress(progress);
+
+      if (progress?.scope === 'all' && !progress.itemKey && ['complete', 'error'].includes(progress.phase)) {
+        load().then(render).catch(() => {});
       }
     });
   };
