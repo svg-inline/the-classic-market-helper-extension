@@ -31,7 +31,8 @@
     return TcmhMarket.parseSnapshotFromDocument(document, {
       url: window.location.href,
       itemKey: key,
-      itemName: item.item_name
+      itemName: item.item_name,
+      iconUrl: item.iconUrl || ''
     });
   };
 
@@ -194,11 +195,13 @@
     const latestId = String(snapshot?.stats?.latest?.item_id || '').trim();
     const itemId = latestId || item.item_id || '';
     const itemName = snapshot?.itemName || item.item_name || item.q || itemId;
+    const iconUrl = snapshot?.iconUrl || item.iconUrl || '';
 
     return {
       ...item,
       item_id: itemId,
       item_name: itemName,
+      iconUrl,
       updatedAt: Date.now()
     };
   };
@@ -350,7 +353,8 @@
           ...searchItem,
           q: searchItem.q || relatedItem.item_name,
           item_id: relatedItem.item_id,
-          item_name: relatedItem.item_name
+          item_name: relatedItem.item_name,
+          iconUrl: relatedItem.iconUrl || ''
         };
         const directResult = await refreshAndStoreItem(directItem);
         navigateToItem(directResult.item);

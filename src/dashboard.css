@@ -125,10 +125,30 @@ a { color: inherit; }
   text-align: left;
   width: 100%;
 }
+.item-button, .related-card { align-items: center; grid-template-columns: auto minmax(0, 1fr); }
 .item-button { cursor: pointer; }
 .item-button.is-active { border-color: rgba(56, 189, 248, .7); box-shadow: 0 0 0 3px rgba(56, 189, 248, .1); }
 .item-button strong, .related-card strong { color: #bae6fd; display: block; font-size: 13px; }
 .item-button span, .related-card span, .alert-card p { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.item-avatar {
+  align-items: center;
+  background: rgba(56, 189, 248, .1);
+  border: 1px solid rgba(148, 163, 184, .25);
+  border-radius: 12px;
+  color: #bae6fd;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 18px;
+  font-weight: 850;
+  height: 48px;
+  justify-content: center;
+  overflow: hidden;
+  width: 48px;
+}
+.item-avatar img { display: block; height: 100%; image-rendering: auto; object-fit: contain; width: 100%; }
+.item-avatar--small { border-radius: 10px; height: 36px; width: 36px; }
+.item-avatar--fallback { text-transform: uppercase; }
+.item-button__text, .related-card__text { min-width: 0; }
 .status-grid { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .status-grid > div { padding: 14px; }
 .status-grid strong { display: block; font-size: 12px; margin-bottom: 6px; }
@@ -137,6 +157,8 @@ a { color: inherit; }
 .grid--2 { grid-template-columns: minmax(0, 1.25fr) minmax(320px, .75fr); }
 .summary { display: grid; gap: 14px; }
 .summary__header { align-items: start; display: flex; gap: 14px; justify-content: space-between; }
+.summary__identity { align-items: center; display: flex; gap: 12px; min-width: 0; }
+.summary__actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .summary__title h3 { font-size: 20px; margin: 0 0 4px; }
 .summary__title p { color: var(--muted); font-size: 12px; margin: 0; }
 .metric-grid { display: grid; gap: 10px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -176,6 +198,9 @@ th:first-child, td:first-child { text-align: left; }
   .app { grid-template-columns: 1fr; }
   .sidebar { max-height: none; position: static; }
   .grid--2, .status-grid, .metric-grid, .settings-grid { grid-template-columns: 1fr; }
+  .summary__header { align-items: stretch; flex-direction: column; }
+  .summary__actions { justify-content: stretch; }
+  .summary__actions .button { flex: 1; }
   .topbar { align-items: stretch; flex-direction: column; }
   .topbar__actions { justify-content: stretch; }
   .topbar__actions .button { flex: 1; }

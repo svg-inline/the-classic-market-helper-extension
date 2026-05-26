@@ -77,14 +77,34 @@
     const latestId = String(snapshot?.stats?.latest?.item_id || '').trim();
     const itemId = latestId || item.item_id || '';
     const itemName = snapshot?.itemName || item.item_name || item.q || itemId;
+    const iconUrl = snapshot?.iconUrl || item.iconUrl || '';
 
     return {
       ...item,
       item_id: itemId,
       item_name: itemName,
+      iconUrl,
       updatedAt: Date.now()
     };
   };
+
+  const iconForItem = (item, snapshot = null) => {
+    const itemId = item?.item_id || snapshot?.stats?.latest?.item_id || '';
+    return snapshot?.iconUrl || item?.iconUrl || (itemId ? `https://theclassic.games/assets/img/iconpw126/${itemId}.png` : '');
+  };
+
+  const itemAvatar = (item, snapshot = null, className = 'item-avatar') => {
+    const iconUrl = iconForItem(item, snapshot);
+    const name = snapshot?.itemName || item?.item_name || item?.q || item?.item_id || 'Item';
+
+    if (iconUrl) {
+      return `<span class="${className}"><img src="${TcmhMarket.escapeHTML(iconUrl)}" alt="${TcmhMarket.escapeHTML(name)}" loading="lazy" referrerpolicy="no-referrer"></span>`;
+    }
+
+    return `<span class="${className} ${className}--fallback">${TcmhMarket.escapeHTML(String(name).slice(0, 1).toUpperCase())}</span>`;
+  };
+
+  const isPinned = (key) => (state?.pinned || []).some((item) => itemKey(item) === key);
 
   const refreshAndStoreItem = async (item) => {
     const refreshResponse = await sendMessage({ type: 'REFRESH_ITEM', item });
@@ -127,7 +147,8 @@
         ...searchItem,
         q: searchItem.q || relatedItem.item_name,
         item_id: relatedItem.item_id,
-        item_name: relatedItem.item_name
+        item_name: relatedItem.item_name,
+        iconUrl: relatedItem.iconUrl || ''
       };
       await refreshAndStoreItem(directItem);
       setText('itemSearchStatus', 'Resultado encontrado e carregado.');
@@ -178,8 +199,11 @@
       const latest = snapshot?.metrics?.averagePrice ? `Últ. média ${snapshot.metrics.averagePrice}` : 'Sem snapshot';
       return `
         <button class="item-button ${key === selectedKey ? 'is-active' : ''}" type="button" data-select-key="${TcmhMarket.escapeHTML(key)}">
-          <strong>${TcmhMarket.escapeHTML(name)}</strong>
-          <span>ID ${TcmhMarket.escapeHTML(item.item_id || '-')} • ${TcmhMarket.escapeHTML(latest)}</span>
+          ${itemAvatar(item, snapshot, 'item-avatar item-avatar--small')}
+          <span class="item-button__text">
+            <strong>${TcmhMarket.escapeHTML(name)}</strong>
+            <span>ID ${TcmhMarket.escapeHTML(item.item_id || '-')} • ${TcmhMarket.escapeHTML(latest)}</span>
+          </span>
         </button>
       `;
     }).join('') : '<div class="empty">Nenhum item fixado.</div>';
@@ -202,15 +226,23 @@
     const trendValue = n(snapshot?.stats?.trend?.avgPricePct || 0);
     const trendClass = trendValue > 0 ? 'is-positive' : trendValue < 0 ? 'is-negative' : '';
     const url = TcmhMarket.buildMarketUrl(item, state.settings);
+    const title = snapshot?.itemName || item.item_name || item.q || item.item_id || key;
+    const pinned = isPinned(key);
 
     $('#selectedSummary').innerHTML = `
       <section class="panel summary">
         <div class="summary__header">
-          <div class="summary__title">
-            <h3>${TcmhMarket.escapeHTML(snapshot?.itemName || item.item_name || item.q || item.item_id || key)}</h3>
-            <p>ID ${TcmhMarket.escapeHTML(item.item_id || '-')} • ${TcmhMarket.escapeHTML(item.start_date || '-')} até ${TcmhMarket.escapeHTML(item.end_date || '-')} • Snapshot ${TcmhMarket.escapeHTML(TcmhMarket.humanDateTime(snapshot?.capturedAt))}</p>
+          <div class="summary__identity">
+            ${itemAvatar(item, snapshot)}
+            <div class="summary__title">
+              <h3>${TcmhMarket.escapeHTML(title)}</h3>
+              <p>ID ${TcmhMarket.escapeHTML(item.item_id || '-')} • ${TcmhMarket.escapeHTML(item.start_date || '-')} até ${TcmhMarket.escapeHTML(item.end_date || '-')} • Snapshot ${TcmhMarket.escapeHTML(TcmhMarket.humanDateTime(snapshot?.capturedAt))}</p>
+            </div>
           </div>
-          <a class="button button--secondary" href="${TcmhMarket.escapeHTML(url)}" target="_blank" rel="noopener noreferrer">Abrir análise</a>
+          <div class="summary__actions">
+            <button class="button button--secondary" type="button" data-action="pin-selected" ${pinned ? 'disabled' : ''}>${pinned ? 'Salvo' : 'Salvar item'}</button>
+            <a class="button button--secondary" href="${TcmhMarket.escapeHTML(url)}" target="_blank" rel="noopener noreferrer">Abrir análise</a>
+          </div>
         </div>
         <div class="metric-grid">
           ${metricCard('Último dia', metrics.latestDate)}
@@ -283,8 +315,11 @@
     const related = snapshot?.relatedItems || [];
     $('#relatedItems').innerHTML = related.length ? related.slice(0, 12).map((item) => `
       <a class="related-card" href="${TcmhMarket.escapeHTML(item.url)}" target="_blank" rel="noopener noreferrer">
-        <strong>${TcmhMarket.escapeHTML(item.item_name)}</strong>
-        <span>#${TcmhMarket.escapeHTML(item.item_id)}${item.averagePrice ? ` • Preço médio ${TcmhMarket.escapeHTML(item.averagePrice)}` : ''}</span>
+        ${itemAvatar(item, null, 'item-avatar item-avatar--small')}
+        <span class="related-card__text">
+          <strong>${TcmhMarket.escapeHTML(item.item_name)}</strong>
+          <span>#${TcmhMarket.escapeHTML(item.item_id)}${item.averagePrice ? ` • Preço médio ${TcmhMarket.escapeHTML(item.averagePrice)}` : ''}</span>
+        </span>
       </a>
     `).join('') : '<div class="empty">Nenhum item relacionado capturado.</div>';
   };
@@ -431,6 +466,18 @@
     render();
   };
 
+  const pinSelected = async () => {
+    const item = getSelectedItem();
+    if (!item) return;
+    const key = itemKey(item);
+    const snapshot = getSnapshot(key);
+    const response = await sendMessage({ type: 'PIN_ITEM', item: itemFromSnapshot(item, snapshot), snapshot });
+    state = response.state || state;
+    selectedKey = key;
+    setText('itemSearchStatus', 'Item salvo nos monitorados.');
+    render();
+  };
+
   const exportData = () => {
     const payload = {
       exportedAt: new Date().toISOString(),
@@ -463,6 +510,8 @@
       if (tabButton) { switchTab(tabButton.dataset.tab); render(); return; }
       const itemButton = event.target.closest('[data-select-key]');
       if (itemButton) { selectedKey = itemButton.dataset.selectKey; render(); return; }
+      const pinButton = event.target.closest('[data-action="pin-selected"]');
+      if (pinButton) { await pinSelected(); return; }
       const toggle = event.target.closest('[data-alert-toggle]');
       if (toggle) {
         const id = toggle.dataset.alertToggle;

@@ -236,6 +236,20 @@ const extractItemNameFromHTML = (html, itemId = '') => {
   return '';
 };
 
+const extractItemIconFromHTML = (html, itemId = '') => {
+  const raw = String(html || '');
+  const id = escapeRegExp(itemId);
+
+  if (!id) {
+    return '';
+  }
+
+  const iconRegex = new RegExp(`<img[^>]+src="([^"]*/icon[^"/]*/${id}\\.(?:png|webp|jpg|jpeg)[^"]*)"`, 'i');
+  const iconMatch = raw.match(iconRegex);
+
+  return iconMatch?.[1] ? decodeHTML(iconMatch[1]) : '';
+};
+
 const extractLinkedItemsFromHTML = (html) => {
   const raw = String(html || '');
   const items = [];
@@ -247,9 +261,11 @@ const extractLinkedItemsFromHTML = (html) => {
     const id = decodeURIComponent(match[2] || '');
     const name = normalizeSpace(decodeHTML(match[3] || ''));
     const averagePrice = match[4] ? normalizeSpace(match[4]) : '';
+    const nearby = raw.slice(Math.max(0, match.index - 700), Math.min(raw.length, regex.lastIndex + 900));
+    const iconUrl = extractItemIconFromHTML(nearby, id);
 
     if (id && name) {
-      items.push({ item_id: id, item_name: name, averagePrice, url: href });
+      items.push({ item_id: id, item_name: name, iconUrl, averagePrice, url: href });
     }
 
     match = regex.exec(raw);
@@ -300,7 +316,8 @@ const buildSnapshotFromMarketRows = (rows, source = {}, html = '') => {
   const trendAbs = latestAvg - firstAvg;
   const trendPct = firstAvg ? (trendAbs / firstAvg) * 100 : 0;
   const itemId = String(latest.item_id || source.itemId || '').trim();
-  const itemName = source.itemName || extractItemNameFromHTML(html, itemId) || itemId || source.itemKey || '';
+  const itemName = extractItemNameFromHTML(html, itemId) || source.itemName || itemId || source.itemKey || '';
+  const iconUrl = extractItemIconFromHTML(html, itemId) || source.iconUrl || '';
   const currencyRows = extractCurrencyRowsFromHTML(html);
   const latestCurrency = sortRowsByDate(currencyRows).at(-1) || null;
 
@@ -311,6 +328,7 @@ const buildSnapshotFromMarketRows = (rows, source = {}, html = '') => {
     sourceUrl: source.url || '',
     itemKey: source.itemKey || '',
     itemName,
+    iconUrl,
     parserConfidence: 'high',
     parserSource: 'inline_apexcharts_rows',
     metrics: {
@@ -375,6 +393,7 @@ const parseSnapshotFromText = (text, source = {}) => {
     sourceUrl: source.url || '',
     itemKey: source.itemKey || '',
     itemName: source.itemName || '',
+    iconUrl: source.iconUrl || '',
     metrics,
     rawTextPreview: normalized.slice(0, 1200),
     parserConfidence: Object.values(metrics).some(Boolean) ? 'medium' : 'low',
@@ -560,7 +579,8 @@ const fetchSnapshotForItem = async (item, settings) => {
   const snapshot = parseSnapshotFromHTML(html, {
     url: response.url || url,
     itemKey,
-    itemName: item.item_name || item.q || item.item_id || itemKey
+    itemName: item.item_name || item.q || item.item_id || itemKey,
+    iconUrl: item.iconUrl || ''
   });
 
   snapshot.httpStatus = response.status;
@@ -591,6 +611,8 @@ const refreshItem = async (item) => {
 
   const pinned = state.pinned.map((current) => slugKey(current) === itemKey ? {
     ...current,
+    item_name: snapshot.itemName || current.item_name,
+    iconUrl: snapshot.iconUrl || current.iconUrl || '',
     updatedAt: Date.now(),
     lastRefreshAt: snapshot.capturedAt,
     lastRefreshOk: snapshot.ok
@@ -659,6 +681,8 @@ const refreshAllPinned = async () => {
     const snapshot = snapshots[slugKey(item)];
     return {
       ...item,
+      item_name: snapshot?.itemName || item.item_name,
+      iconUrl: snapshot?.iconUrl || item.iconUrl || '',
       updatedAt: now,
       lastRefreshAt: snapshot?.capturedAt || now,
       lastRefreshOk: Boolean(snapshot?.ok)
