@@ -1491,21 +1491,27 @@ Cuidados:
 
 - não atualizar muitos itens em paralelo;
 - usar fila com concorrência baixa;
+- aguardar um intervalo aleatório de 30 a 60 segundos entre requisições ao painel;
 - evitar intervalos curtos;
 - não salvar HTML bruto repetidamente;
 - salvar somente dados normalizados;
 - limitar histórico;
 - recalcular dashboard sob demanda ou com debounce.
 
-Fila simples:
+Fila simples com throttle:
 
 ```js
+const randomDelayMs = () => 30000 + Math.round(Math.random() * 30000);
+
 const runSequentially = async (items, task) => {
   const results = [];
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
+    if (index > 0) {
+      await new Promise((resolve) => setTimeout(resolve, randomDelayMs()));
+    }
+
     results.push(await task(item));
-    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
   return results;

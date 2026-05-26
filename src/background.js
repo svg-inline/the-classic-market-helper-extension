@@ -1,6 +1,11 @@
 'use strict';
 
 const ALARM_NAME = 'tcmh-refresh-prices';
+const FETCH_THROTTLE_MIN_MS = 30 * 1000;
+const FETCH_THROTTLE_MAX_MS = 60 * 1000;
+let nextFetchAllowedAt = 0;
+let fetchThrottleQueue = Promise.resolve();
+
 const STORAGE_DEFAULTS = Object.freeze({
   schemaVersion: 2,
   settings: {
@@ -43,6 +48,42 @@ const storageGet = (keys = null) => new Promise((resolve) => {
 const storageSet = (payload) => new Promise((resolve) => {
   chrome.storage.local.set(payload, () => resolve());
 });
+
+const sleep = (delayMs) => new Promise((resolve) => {
+  setTimeout(resolve, delayMs);
+});
+
+const randomFetchThrottleMs = () => {
+  const range = FETCH_THROTTLE_MAX_MS - FETCH_THROTTLE_MIN_MS;
+  return FETCH_THROTTLE_MIN_MS + Math.round(Math.random() * range);
+};
+
+const waitForFetchThrottle = async () => {
+  const waitMs = Math.max(0, nextFetchAllowedAt - Date.now());
+
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+};
+
+const markNextFetchThrottle = () => {
+  nextFetchAllowedAt = Date.now() + randomFetchThrottleMs();
+};
+
+const runWithFetchThrottle = (task) => {
+  const throttledTask = fetchThrottleQueue.then(async () => {
+    await waitForFetchThrottle();
+
+    try {
+      return await task();
+    } finally {
+      markNextFetchThrottle();
+    }
+  });
+
+  fetchThrottleQueue = throttledTask.catch(() => {});
+  return throttledTask;
+};
 
 const getState = async () => {
   const result = await storageGet(null);
@@ -568,36 +609,39 @@ const evaluateAlerts = async (state, snapshots, touchedKeys = null) => {
 const fetchSnapshotForItem = async (item, settings) => {
   const itemKey = slugKey(item);
   const url = buildMarketUrl(item, settings);
-  const response = await fetch(url, {
-    method: 'GET',
-    credentials: 'include',
-    cache: 'no-store',
-    redirect: 'follow'
+
+  return runWithFetchThrottle(async () => {
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      redirect: 'follow'
+    });
+
+    const html = await response.text();
+    const snapshot = parseSnapshotFromHTML(html, {
+      url: response.url || url,
+      itemKey,
+      itemName: item.item_name || item.q || item.item_id || itemKey,
+      iconUrl: item.iconUrl || ''
+    });
+
+    snapshot.httpStatus = response.status;
+    snapshot.finalUrl = response.url || url;
+
+    if (!response.ok) {
+      snapshot.ok = false;
+      snapshot.error = `HTTP ${response.status}`;
+    }
+
+    if (snapshot.finalUrl && !snapshot.finalUrl.includes('/panel/market-analysis')) {
+      snapshot.ok = false;
+      snapshot.loginRequired = true;
+      snapshot.error = 'Sessão expirada ou redirecionada para fora da análise de mercado.';
+    }
+
+    return snapshot;
   });
-
-  const html = await response.text();
-  const snapshot = parseSnapshotFromHTML(html, {
-    url: response.url || url,
-    itemKey,
-    itemName: item.item_name || item.q || item.item_id || itemKey,
-    iconUrl: item.iconUrl || ''
-  });
-
-  snapshot.httpStatus = response.status;
-  snapshot.finalUrl = response.url || url;
-
-  if (!response.ok) {
-    snapshot.ok = false;
-    snapshot.error = `HTTP ${response.status}`;
-  }
-
-  if (snapshot.finalUrl && !snapshot.finalUrl.includes('/panel/market-analysis')) {
-    snapshot.ok = false;
-    snapshot.loginRequired = true;
-    snapshot.error = 'Sessão expirada ou redirecionada para fora da análise de mercado.';
-  }
-
-  return snapshot;
 };
 
 const refreshItem = async (item) => {
