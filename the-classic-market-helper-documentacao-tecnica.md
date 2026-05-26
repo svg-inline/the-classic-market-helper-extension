@@ -1149,7 +1149,7 @@ const createItemFromSearch = (query, settings = {}) => {
 };
 ```
 
-Observação: a implementação real também aplica o período configurado pela extensão, usando janela móvel quando essa opção estiver ativa.
+Observação: a implementação real cria o item de busca com uma janela móvel inicial de datas. Se `dateMode` estiver como `rolling`, `buildMarketUrl` recalcula essa janela antes de montar a URL final.
 
 ## 30. Busca no site em background por termo textual
 
@@ -1491,6 +1491,7 @@ Status da última atualização
 Alertas de preço
 Exportar/importar
 Busca local
+Busca direta por ID/nome
 Categorias/tags
 Configuração de intervalo
 ```
@@ -1514,4 +1515,4 @@ Motivo: a extensão consegue trabalhar sobre a página logada, usar a sessão at
 
 A fonte principal dos preços não é o tooltip do gráfico. A fonte principal é o array JavaScript `rows` embutido no HTML da página. Os cards visíveis servem como complemento para nome, ID, ícone e links dos itens.
 
-A extensão deve tratar o 
+A extensão deve tratar o HTML como uma fonte instável, com parser isolado, validação forte, fallback e logs de erro.
