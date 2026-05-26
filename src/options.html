@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opções — The Classic Market Helper</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page__header">
+      <div>
+        <h1>The Classic Market Helper</h1>
+        <p>Configuração da atualização automática e dados locais.</p>
+      </div>
+    </header>
+
+    <form class="card" id="settingsForm">
+      <h2>Atualização de preços</h2>
+
+      <label class="check">
+        <input type="checkbox" id="autoRefreshEnabled">
+        <span>Ativar atualização automática dos itens fixados</span>
+      </label>
+
+      <div class="field-grid">
+        <label class="field">
+          <span>Frequência</span>
+          <select id="refreshPreset">
+            <option value="every_5_hours">Cada 5 horas</option>
+            <option value="three_times_day">3 vezes ao dia</option>
+            <option value="two_times_day">2 vezes ao dia</option>
+            <option value="once_day">1 vez ao dia</option>
+            <option value="every_2_days">Cada 2 dias</option>
+            <option value="every_3_days">Cada 3 dias</option>
+            <option value="weekly">A cada 7 dias</option>
+            <option value="every_15_days">A cada 15 dias</option>
+            <option value="monthly">A cada 30 dias</option>
+            <option value="custom">Intervalo personalizado</option>
+          </select>
+        </label>
+
+        <label class="field" id="customHoursField">
+          <span>Personalizado em horas</span>
+          <input type="number" id="customHours" min="1" step="1" value="24">
+        </label>
+      </div>
+
+      <div class="field-grid">
+        <label class="field">
+          <span>Período usado ao atualizar</span>
+          <select id="dateMode">
+            <option value="saved">Manter datas salvas no item</option>
+            <option value="rolling">Usar janela móvel</option>
+          </select>
+        </label>
+
+        <label class="field" id="rollingDaysField">
+          <span>Dias da janela móvel</span>
+          <input type="number" id="rollingDays" min="1" step="1" value="30">
+        </label>
+      </div>
+
+      <div class="field-grid">
+        <label class="field">
+          <span>Máximo de itens no histórico</span>
+          <input type="number" id="maxHistory" min="10" max="500" step="10" value="50">
+        </label>
+      </div>
+
+      <label class="check">
+        <input type="checkbox" id="notifyOnRefreshError">
+        <span>Notificar quando alguma atualização falhar</span>
+      </label>
+
+      <label class="check">
+        <input type="checkbox" id="notifyOnRefreshSuccess">
+        <span>Notificar quando todas as atualizações forem concluídas</span>
+      </label>
+
+      <div class="actions">
+        <button class="button" type="submit">Salvar opções</button>
+        <button class="button button--secondary" type="button" id="refreshAll">Atualizar fixados agora</button>
+      </div>
+
+      <p class="status" id="settingsStatus" role="status"></p>
+    </form>
+
+    <section class="card">
+      <h2>Status</h2>
+      <div class="status-grid" id="statusGrid"></div>
+    </section>
+
+    <section class="card">
+      <h2>Dados locais</h2>
+      <p class="muted">Exporta/importa apenas favoritos, histórico, snapshots e configurações. Não exporta login, senha, cookie ou token.</p>
+      <div class="actions">
+        <button class="button button--secondary" type="button" id="exportData">Exportar JSON</button>
+        <label class="button button--secondary file-button">
+          Importar JSON
+          <input type="file" id="importData" accept="application/json,.json">
+        </label>
+      </div>
+      <p class="status" id="dataStatus" role="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>Itens fixados</h2>
+      <div class="items" id="pinnedList"></div>
+    </section>
+  </main>
+
+  <script src="storage.js"></script>
+  <script src="market.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

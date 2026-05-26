@@ -1,0 +1,10 @@
+:root { color-scheme: dark; --bg:#0f172a; --border:rgba(148,163,184,.28); --text:#e5e7eb; --muted:#94a3b8; --accent:#38bdf8; }
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: Inter, system-ui, sans-serif; margin: 0; }
+.pip { display: grid; gap: 10px; padding: 14px; }
+.pip header { border-bottom: 1px solid var(--border); display: grid; gap: 4px; padding-bottom: 10px; }
+.pip header strong { color: #bae6fd; font-size: 15px; }
+.pip header span, .pip footer, .pip b { color: var(--muted); font-size: 11px; }
+.pip section { background: rgba(2,6,23,.35); border: 1px solid var(--border); border-radius: 12px; display: flex; justify-content: space-between; gap: 10px; padding: 10px; }
+.pip section strong { font-size: 16px; }
+.pip footer { padding-top: 2px; }

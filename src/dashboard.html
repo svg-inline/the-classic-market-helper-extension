@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Classic Market Helper — Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <main class="app" aria-live="polite">
+    <aside class="sidebar">
+      <header class="brand">
+        <div>
+          <h1>Market Helper</h1>
+          <p>Dashboard local da extensão</p>
+        </div>
+        <button class="button button--ghost" type="button" id="refreshAllTop">Atualizar</button>
+      </header>
+
+      <nav class="nav" aria-label="Seções do dashboard">
+        <button class="nav__button is-active" type="button" data-tab="monitor">Itens monitorados</button>
+        <button class="nav__button" type="button" data-tab="history">Histórico de preços</button>
+        <button class="nav__button" type="button" data-tab="alerts">Alertas de preço</button>
+        <button class="nav__button" type="button" data-tab="settings">Configuração</button>
+        <button class="nav__button" type="button" data-tab="data">Exportar/importar</button>
+      </nav>
+
+      <section class="panel panel--compact">
+        <form id="itemSearchForm">
+          <label class="field-label" for="itemSearch">Buscar item</label>
+          <div class="search-row">
+            <input class="input" id="itemSearch" type="search" placeholder="Nome ou ID">
+            <button class="button button--secondary button--icon" type="submit" title="Buscar por nome ou ID">⌕</button>
+          </div>
+          <p id="itemSearchStatus" class="status-text"></p>
+        </form>
+      </section>
+
+      <section class="panel sidebar__items">
+        <div class="panel__title-row">
+          <h2>Monitorados</h2>
+          <span id="pinnedCount" class="badge">0</span>
+        </div>
+        <div id="sidebarItems" class="item-list"></div>
+      </section>
+    </aside>
+
+    <section class="content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">The Classic Games</p>
+          <h2 id="pageTitle">Dashboard full screen</h2>
+        </div>
+        <div class="topbar__actions">
+          <a class="button button--secondary" href="https://userpanel.theclassic.games/panel/market-analysis" target="_blank" rel="noopener noreferrer">Abrir painel</a>
+          <button class="button" type="button" id="refreshSelected">Atualizar item</button>
+          <button class="button button--secondary" type="button" id="openPip">PiP item principal</button>
+        </div>
+      </header>
+
+      <section id="statusGrid" class="status-grid"></section>
+
+      <section class="tab is-active" data-tab-panel="monitor">
+        <div id="selectedSummary"></div>
+        <div class="grid grid--2">
+          <section class="panel">
+            <div class="panel__title-row">
+              <h3>Evolução diária</h3>
+              <span id="chartHint" class="muted"></span>
+            </div>
+            <div id="priceChart" class="chart"></div>
+          </section>
+          <section class="panel">
+            <div class="panel__title-row">
+              <h3>Itens relacionados da busca</h3>
+              <span class="muted">capturados do HTML</span>
+            </div>
+            <div id="relatedItems" class="related-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" data-tab-panel="history">
+        <section class="panel">
+          <div class="panel__title-row">
+            <h3>Histórico diário do item selecionado</h3>
+            <button class="button button--secondary button--small" type="button" id="copyTable">Copiar CSV</button>
+          </div>
+          <div id="historyTable" class="table-wrap"></div>
+        </section>
+      </section>
+
+      <section class="tab" data-tab-panel="alerts">
+        <div class="grid grid--2">
+          <section class="panel">
+            <h3>Novo alerta</h3>
+            <form id="alertForm" class="form-grid">
+              <label>
+                <span class="field-label">Item</span>
+                <select class="input" id="alertItem" required></select>
+              </label>
+              <label>
+                <span class="field-label">Condição</span>
+                <select class="input" id="alertCondition" required>
+                  <option value="avg_above">Última média acima</option>
+                  <option value="avg_below">Última média abaixo</option>
+                  <option value="median_above">Última mediana acima</option>
+                  <option value="median_below">Última mediana abaixo</option>
+                  <option value="trades_above">Trades do último dia acima</option>
+                  <option value="variation_above">Variação do período acima de %</option>
+                  <option value="variation_below">Variação do período abaixo de %</option>
+                </select>
+              </label>
+              <label>
+                <span class="field-label">Alvo</span>
+                <input class="input" id="alertTarget" type="number" step="0.01" required placeholder="Ex: 80000 ou -5">
+              </label>
+              <button class="button" type="submit">Criar alerta</button>
+            </form>
+          </section>
+          <section class="panel">
+            <div class="panel__title-row">
+              <h3>Alertas ativos</h3>
+              <span id="alertCount" class="badge">0</span>
+            </div>
+            <div id="alertsList" class="alert-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab" data-tab-panel="settings">
+        <section class="panel">
+          <h3>Configuração de intervalo</h3>
+          <form id="settingsForm" class="settings-grid">
+            <label class="check-row">
+              <input type="checkbox" id="autoRefreshEnabled">
+              <span>Atualização automática ativa</span>
+            </label>
+            <label>
+              <span class="field-label">Intervalo</span>
+              <select class="input" id="refreshPreset"></select>
+            </label>
+            <label id="customHoursWrap">
+              <span class="field-label">Horas personalizadas</span>
+              <input class="input" id="customHours" type="number" min="1" max="720" step="1">
+            </label>
+            <label>
+              <span class="field-label">Período usado nas URLs</span>
+              <select class="input" id="dateMode">
+                <option value="saved">Usar período salvo no item</option>
+                <option value="rolling">Usar janela móvel</option>
+              </select>
+            </label>
+            <label id="rollingDaysWrap">
+              <span class="field-label">Dias da janela móvel</span>
+              <input class="input" id="rollingDays" type="number" min="1" max="365" step="1">
+            </label>
+            <label>
+              <span class="field-label">Máximo no histórico</span>
+              <input class="input" id="maxHistory" type="number" min="10" max="500" step="1">
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="alertNotificationsEnabled">
+              <span>Notificações de alertas ativas</span>
+            </label>
+            <label>
+              <span class="field-label">Cooldown de alerta em horas</span>
+              <input class="input" id="alertCooldownHours" type="number" min="0" max="168" step="1">
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="notifyOnRefreshError">
+              <span>Notificar falhas de atualização</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" id="notifyOnRefreshSuccess">
+              <span>Notificar atualizações com sucesso</span>
+            </label>
+            <button class="button" type="submit">Salvar configuração</button>
+          </form>
+          <p id="settingsStatus" class="status-text"></p>
+        </section>
+      </section>
+
+      <section class="tab" data-tab-panel="data">
+        <div class="grid grid--2">
+          <section class="panel">
+            <h3>Exportar</h3>
+            <p class="muted">Baixa um JSON com configurações, fixados, histórico, snapshots e alertas.</p>
+            <button class="button" type="button" id="exportData">Exportar JSON</button>
+          </section>
+          <section class="panel">
+            <h3>Importar</h3>
+            <p class="muted">Importa um JSON exportado pela extensão.</p>
+            <input class="input" type="file" id="importData" accept="application/json,.json">
+          </section>
+        </div>
+        <p id="dataStatus" class="status-text"></p>
+      </section>
+    </section>
+  </main>
+
+  <script src="storage.js"></script>
+  <script src="market.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

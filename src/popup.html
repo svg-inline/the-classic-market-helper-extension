@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Classic Market Helper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup" aria-live="polite">
+    <header class="popup__header">
+      <div>
+        <h1>The Classic Market Helper</h1>
+        <p>Monitoramento local dos itens fixados.</p>
+      </div>
+    </header>
+
+    <section class="stats" id="stats"></section>
+
+    <div class="actions">
+      <button class="button" type="button" id="refreshAll">Atualizar fixados</button>
+      <button class="button button--secondary" type="button" id="openDashboard">Dashboard</button>
+    </div>
+
+    <section class="items">
+      <h2>Fixados recentes</h2>
+      <div id="pinnedList" class="items__list"></div>
+    </section>
+  </main>
+
+  <script src="storage.js"></script>
+  <script src="market.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
