@@ -40,7 +40,7 @@
     null;
   const getSnapshot = (key = selectedKey) => state?.snapshots?.[key] || null;
   const normalizedSearch = (value) =>
-    TcmhMarket.normalizeSpace(value).replace(/^#/, "").toLowerCase();
+    TcmhMarket.searchTokens(value).join(" ");
   const selectedName = () => {
     const item = getSelectedItem();
     const snapshot = getSnapshot(item ? itemKey(item) : selectedKey);
@@ -132,6 +132,7 @@
       item.item_name,
       item.q,
       snapshot?.itemName,
+      snapshot?.stats?.latest?.item_id,
     ]
       .filter(Boolean)
       .map((value) => normalizedSearch(value));
@@ -155,6 +156,7 @@
       new Map(allItems().map((item) => [itemKey(item), item])).values(),
     );
     const exactMatches = items.filter((item) =>
+      TcmhMarket.hasConcreteItemId(item, getSnapshot(itemKey(item))) &&
       itemMatchesSearch(item, query, true),
     );
 
@@ -166,23 +168,18 @@
   };
 
   const relatedMatchesFromSearch = (relatedItems, query) => {
-    const needle = normalizedSearch(query);
     const related = Array.isArray(relatedItems) ? relatedItems : [];
+    const scored = related
+      .map((item) => ({
+        item,
+        score: TcmhMarket.searchMatchScore(item, query),
+      }))
+      .filter((entry) => entry.score >= 500)
+      .sort((a, b) => b.score - a.score);
 
-    const exactMatches = related.filter(
-      (item) =>
-        normalizedSearch(item.item_id) === needle ||
-        normalizedSearch(item.item_name) === needle,
-    );
-    if (exactMatches.length) {
-      return exactMatches;
-    }
-
-    const prefixMatches = related.filter((item) =>
-      normalizedSearch(item.item_name).startsWith(needle),
-    );
-    if (prefixMatches.length) {
-      return prefixMatches;
+    if (scored.length) {
+      return scored
+        .map((entry) => entry.item);
     }
 
     return related.length === 1 ? related : [];

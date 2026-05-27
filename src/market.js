@@ -24,6 +24,64 @@
 
   const normalizeSpace = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
+  const SEARCH_STOP_WORDS = new Set(['a', 'as', 'da', 'das', 'de', 'do', 'dos', 'e', 'o', 'os']);
+
+  const normalizeSearchText = (value) => normalizeSpace(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[★☆#]/g, ' ')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .toLowerCase();
+
+  const searchTokens = (value) => normalizeSearchText(value)
+    .split(' ')
+    .filter((token) => token && !SEARCH_STOP_WORDS.has(token));
+
+  const searchMatchScore = (item = {}, query = '') => {
+    const needleId = normalizeSearchText(query).replace(/\s/g, '');
+    const itemId = normalizeSearchText(item.item_id || '').replace(/\s/g, '');
+
+    if (needleId && itemId && needleId === itemId) {
+      return 1000;
+    }
+
+    const queryText = searchTokens(query).join(' ');
+    const nameText = searchTokens(item.item_name || item.q || '').join(' ');
+
+    if (!queryText || !nameText) {
+      return 0;
+    }
+
+    let score = 0;
+
+    if (nameText === queryText) {
+      score = 900;
+    } else if (nameText.startsWith(queryText)) {
+      score = 800;
+    } else if (nameText.includes(queryText)) {
+      score = 700;
+    } else {
+      const nameTokens = new Set(nameText.split(' '));
+      const queryTokens = queryText.split(' ');
+      const matchedTokens = queryTokens.filter((token) => nameTokens.has(token));
+
+      if (matchedTokens.length === queryTokens.length) {
+        score = 600;
+      } else if (matchedTokens.length) {
+        score = Math.round((matchedTokens.length / queryTokens.length) * 300);
+      }
+    }
+
+    if (/^(molde|receita|fragmento|parte)\b/.test(nameText)) {
+      score -= 150;
+    }
+
+    return Math.max(0, score);
+  };
+
+  const hasConcreteItemId = (item = {}, snapshot = null) =>
+    Boolean(item?.item_id || snapshot?.stats?.latest?.item_id);
+
   const escapeHTML = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({
     '&': '&amp;',
     '<': '&lt;',
@@ -531,6 +589,10 @@
     formatDateBr,
     makeRollingRange,
     normalizeSpace,
+    normalizeSearchText,
+    searchTokens,
+    searchMatchScore,
+    hasConcreteItemId,
     escapeHTML,
     slugKey,
     createItemFromSearch,

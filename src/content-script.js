@@ -63,7 +63,7 @@
   };
 
   const getPanel = () => document.getElementById(PANEL_ID);
-  const normalizedSearch = (value) => TcmhMarket.normalizeSpace(value).replace(/^#/, '').toLowerCase();
+  const normalizedSearch = (value) => TcmhMarket.searchTokens(value).join(' ');
 
   const metricLabel = (key) => ({
     latestDate: 'Data',
@@ -163,7 +163,13 @@
     }
 
     const snapshot = currentState?.snapshots?.[TcmhMarket.slugKey(item)];
-    const exactValues = [item.item_id, item.item_name, item.q, snapshot?.itemName]
+    const exactValues = [
+      item.item_id,
+      item.item_name,
+      item.q,
+      snapshot?.itemName,
+      snapshot?.stats?.latest?.item_id
+    ]
       .filter(Boolean)
       .map((value) => normalizedSearch(value));
 
@@ -184,7 +190,10 @@
   const findItemFromSearch = (query) => {
     const lists = [currentState?.pinned || [], currentState?.history || []];
     const items = Array.from(new Map(lists.flat().map((item) => [TcmhMarket.slugKey(item), item])).values());
-    const exactMatches = items.filter((item) => itemMatchesSearch(item, query, true));
+    const exactMatches = items.filter((item) => {
+      const snapshot = currentState?.snapshots?.[TcmhMarket.slugKey(item)];
+      return TcmhMarket.hasConcreteItemId(item, snapshot) && itemMatchesSearch(item, query, true);
+    });
 
     if (exactMatches.length === 1) {
       return exactMatches[0];
@@ -194,17 +203,18 @@
   };
 
   const relatedMatchesFromSearch = (relatedItems, query) => {
-    const needle = normalizedSearch(query);
     const related = Array.isArray(relatedItems) ? relatedItems : [];
+    const scored = related
+      .map((item) => ({
+        item,
+        score: TcmhMarket.searchMatchScore(item, query)
+      }))
+      .filter((entry) => entry.score >= 500)
+      .sort((a, b) => b.score - a.score);
 
-    const exactMatches = related.filter((item) => normalizedSearch(item.item_id) === needle || normalizedSearch(item.item_name) === needle);
-    if (exactMatches.length) {
-      return exactMatches;
-    }
-
-    const prefixMatches = related.filter((item) => normalizedSearch(item.item_name).startsWith(needle));
-    if (prefixMatches.length) {
-      return prefixMatches;
+    if (scored.length) {
+      return scored
+        .map((entry) => entry.item);
     }
 
     return related.length === 1 ? related : [];

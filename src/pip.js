@@ -9,8 +9,11 @@
   let alarm = null;
   let selectedKey = params.get("key") || "";
   let activeTab = params.get("tab") || "main";
+  let searchValue = params.get("q") || "";
+  let searchStatus = "";
   let progressMessage = "";
   let isRefreshing = false;
+  let isSearching = false;
 
   const ALERT_LABELS = {
     avg_above: "Última média acima",
@@ -57,6 +60,9 @@
     getItem(selectedKey) || state?.pinned?.[0] || state?.history?.[0] || null;
 
   const getSnapshot = (key = selectedKey) => state?.snapshots?.[key] || null;
+
+  const normalizedSearch = (value) =>
+    TcmhMarket.searchTokens(value).join(" ");
 
   const labelForItem = (item, snapshot = null) =>
     snapshot?.itemName ||
@@ -216,6 +222,113 @@
     };
   };
 
+  const itemMatchesSearch = (item, query, exactOnly = false) => {
+    const needle = normalizedSearch(query);
+
+    if (!needle || !item) {
+      return false;
+    }
+
+    const snapshot = getSnapshot(itemKey(item));
+    const exactValues = [
+      item.item_id,
+      item.item_name,
+      item.q,
+      snapshot?.itemName,
+      snapshot?.stats?.latest?.item_id,
+    ]
+      .filter(Boolean)
+      .map((value) => normalizedSearch(value));
+
+    if (exactValues.includes(needle)) {
+      return true;
+    }
+
+    if (exactOnly) {
+      return false;
+    }
+
+    return [item.item_name, item.item_id, item.q, item.game, snapshot?.itemName]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle);
+  };
+
+  const findItemFromSearch = (query) => {
+    const exactMatches = allItems().filter((item) =>
+      TcmhMarket.hasConcreteItemId(item, getSnapshot(itemKey(item))) &&
+      itemMatchesSearch(item, query, true),
+    );
+
+    return exactMatches.length === 1 ? exactMatches[0] : null;
+  };
+
+  const relatedMatchesFromSearch = (relatedItems, query) => {
+    const related = Array.isArray(relatedItems) ? relatedItems : [];
+    const scored = related
+      .map((item) => ({
+        item,
+        score: TcmhMarket.searchMatchScore(item, query),
+      }))
+      .filter((entry) => entry.score >= 500)
+      .sort((a, b) => b.score - a.score);
+
+    if (scored.length) {
+      return scored
+        .map((entry) => entry.item);
+    }
+
+    return related.length === 1 ? related : [];
+  };
+
+  const itemFromRelatedSearch = (searchItem, relatedItem) => ({
+    ...searchItem,
+    q: "",
+    item_id: relatedItem.item_id,
+    item_name: relatedItem.item_name,
+    iconUrl: relatedItem.iconUrl || "",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+
+  const itemFromSnapshot = (item, snapshot) => {
+    const latestId = String(snapshot?.stats?.latest?.item_id || "").trim();
+    const itemId = latestId || item.item_id || "";
+    const itemName = snapshot?.itemName || item.item_name || item.q || itemId;
+    const iconUrl = snapshot?.iconUrl || item.iconUrl || "";
+
+    return {
+      ...item,
+      item_id: itemId,
+      item_name: itemName,
+      iconUrl,
+      updatedAt: Date.now(),
+    };
+  };
+
+  const storeRelatedMatches = async (searchItem, matches) => {
+    const items = matches.map((relatedItem) =>
+      itemFromRelatedSearch(searchItem, relatedItem),
+    );
+    const response = await sendMessage({ type: "UPSERT_HISTORY_ITEMS", items });
+    state = response.state || state;
+    return items;
+  };
+
+  const refreshAndStoreItem = async (item) => {
+    const refreshResponse = await sendMessage({ type: "REFRESH_ITEM", item });
+    const snapshot = refreshResponse.snapshot || null;
+    const normalizedItem = itemFromSnapshot(item, snapshot);
+    const historyResponse = await sendMessage({
+      type: "UPSERT_HISTORY",
+      item: normalizedItem,
+      snapshot,
+    });
+    state = historyResponse.state || refreshResponse.state || state;
+    selectedKey = itemKey(normalizedItem);
+    return { item: normalizedItem, snapshot };
+  };
+
   const renderMain = () => {
     const { item, key, snapshot } = selectedData();
 
@@ -340,6 +453,68 @@
     `;
   };
 
+  const renderSearchItem = (item) => {
+    const key = itemKey(item);
+    const snapshot = getSnapshot(key);
+    const metrics = snapshot?.metrics || {};
+    const name = labelForItem(item, snapshot) || "Item";
+    const latest = metrics.averagePrice
+      ? `Média ${metrics.averagePrice}`
+      : "Sem snapshot";
+
+    return `
+      <button class="pip-item ${key === selectedKey ? "is-active" : ""}" type="button" data-select-key="${e(key)}">
+        ${avatar(item, snapshot, "pip-avatar pip-avatar--small")}
+        <span class="pip-item__text">
+          <span class="pip-item__row">
+            <strong>${e(name)}</strong>
+            <span class="pip-trend ${trendInfo(snapshot).className}">${e(trendInfo(snapshot).label)}</span>
+          </span>
+          <span>ID ${e(item.item_id || "-")} • ${e(latest)}</span>
+        </span>
+      </button>
+    `;
+  };
+
+  const renderSearch = () => {
+    const term = TcmhMarket.normalizeSpace(searchValue);
+    const matches = term
+      ? allItems()
+          .filter((item) => itemMatchesSearch(item, term))
+          .slice(0, 12)
+      : allItems().slice(0, 8);
+
+    return `
+      <section class="pip-card">
+        <form class="pip-search" data-role="pip-search-form">
+          <input
+            class="pip-search__input"
+            type="search"
+            data-role="pip-search-input"
+            placeholder="Nome ou ID do item"
+            value="${e(searchValue)}"
+            autocomplete="off"
+          >
+          <button class="pip-button pip-button--primary" type="submit" ${isSearching ? "disabled" : ""}>${isSearching ? "Buscando" : "Buscar"}</button>
+        </form>
+
+        ${searchStatus ? `<div class="pip-search__status">${e(searchStatus)}</div>` : ""}
+
+        <div class="pip-section-title">
+          <h2>${term ? "Resultados" : "Itens recentes"}</h2>
+          <span class="pip-badge">${matches.length}</span>
+        </div>
+        <div class="pip-list">
+          ${
+            matches.length
+              ? matches.map(renderSearchItem).join("")
+              : '<div class="pip-muted">Nenhum item local encontrado. Busque pelo nome ou ID para carregar do painel.</div>'
+          }
+        </div>
+      </section>
+    `;
+  };
+
   const renderAlerts = () => {
     const alerts = state?.alerts || [];
     const activeAlerts = alerts.filter(
@@ -388,9 +563,26 @@
     <nav class="pip-tabs" role="tablist" aria-label="Seções do PiP">
       <button class="pip-tab ${activeTab === "main" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeTab === "main"}" data-tab="main">Principal</button>
       <button class="pip-tab ${activeTab === "watchlist" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeTab === "watchlist"}" data-tab="watchlist">Monitorados</button>
+      <button class="pip-tab ${activeTab === "search" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeTab === "search"}" data-tab="search">Busca</button>
       <button class="pip-tab ${activeTab === "alerts" ? "is-active" : ""}" type="button" role="tab" aria-selected="${activeTab === "alerts"}" data-tab="alerts">Alertas</button>
     </nav>
   `;
+
+  const renderActivePanel = () => {
+    if (activeTab === "watchlist") {
+      return renderWatchlist();
+    }
+
+    if (activeTab === "search") {
+      return renderSearch();
+    }
+
+    if (activeTab === "alerts") {
+      return renderAlerts();
+    }
+
+    return renderMain();
+  };
 
   const render = () => {
     if (!state) {
@@ -422,7 +614,7 @@
         </header>
 
         <div class="pip-panel" role="tabpanel">
-          ${activeTab === "watchlist" ? renderWatchlist() : activeTab === "alerts" ? renderAlerts() : renderMain()}
+          ${renderActivePanel()}
         </div>
       </div>
     `;
@@ -469,6 +661,74 @@
     render();
   };
 
+  const searchItemDirectly = async (query) => {
+    const term = TcmhMarket.normalizeSpace(query);
+
+    if (!term || isSearching) {
+      return;
+    }
+
+    const localItem = findItemFromSearch(term);
+    if (localItem) {
+      selectedKey = itemKey(localItem);
+      activeTab = "main";
+      searchStatus = "Item selecionado da lista local.";
+      render();
+      return;
+    }
+
+    const settings = state?.settings || TcmhStorage.DEFAULT_SETTINGS;
+    const searchItem = TcmhMarket.createItemFromSearch(term, settings);
+    if (!searchItem) {
+      return;
+    }
+
+    isSearching = true;
+    searchStatus = "Buscando item...";
+    render();
+
+    try {
+      const refreshResponse = await sendMessage({
+        type: "REFRESH_ITEM",
+        item: searchItem,
+      });
+      const snapshot = refreshResponse.snapshot || null;
+      state = refreshResponse.state || state;
+      const relatedMatches = !searchItem.item_id
+        ? relatedMatchesFromSearch(snapshot?.relatedItems, term)
+        : [];
+
+      if (relatedMatches.length > 1) {
+        const storedItems = await storeRelatedMatches(searchItem, relatedMatches);
+        selectedKey = storedItems[0] ? itemKey(storedItems[0]) : selectedKey;
+        searchStatus = `${storedItems.length} resultados encontrados. Escolha o item correto.`;
+      } else if (relatedMatches.length === 1 && relatedMatches[0]?.item_id) {
+        const directItem = itemFromRelatedSearch(searchItem, relatedMatches[0]);
+        await refreshAndStoreItem(directItem);
+        activeTab = "main";
+        searchStatus = "Resultado encontrado e carregado.";
+      } else {
+        const normalizedItem = itemFromSnapshot(searchItem, snapshot);
+        const historyResponse = await sendMessage({
+          type: "UPSERT_HISTORY",
+          item: normalizedItem,
+          snapshot,
+        });
+        state = historyResponse.state || state;
+        selectedKey = itemKey(normalizedItem);
+        activeTab = "main";
+        searchStatus = snapshot?.ok
+          ? "Item carregado."
+          : "Busca salva no histórico; verifique sua sessão no painel.";
+      }
+    } catch (error) {
+      searchStatus = `Falha na busca: ${error.message || String(error)}`;
+    } finally {
+      isSearching = false;
+      render();
+    }
+  };
+
   const handleClick = async (event) => {
     const tabButton = event.target.closest("[data-tab]");
     if (tabButton) {
@@ -506,6 +766,34 @@
     handleClick(event).catch((error) => {
       progressMessage = `Erro: ${error.message || String(error)}`;
       isRefreshing = false;
+      isSearching = false;
+      render();
+    });
+  });
+
+  app.addEventListener("input", (event) => {
+    const input = event.target.closest('[data-role="pip-search-input"]');
+    if (!input) {
+      return;
+    }
+
+    searchValue = input.value;
+    render();
+    const nextInput = app.querySelector('[data-role="pip-search-input"]');
+    nextInput?.focus();
+    nextInput?.setSelectionRange?.(searchValue.length, searchValue.length);
+  });
+
+  app.addEventListener("submit", (event) => {
+    const form = event.target.closest('[data-role="pip-search-form"]');
+    if (!form) {
+      return;
+    }
+
+    event.preventDefault();
+    searchItemDirectly(searchValue).catch((error) => {
+      searchStatus = `Falha na busca: ${error.message || String(error)}`;
+      isSearching = false;
       render();
     });
   });

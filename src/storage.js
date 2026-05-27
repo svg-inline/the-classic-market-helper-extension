@@ -38,16 +38,46 @@
     lastRefreshStatus: 'never'
   });
 
+  const hasChromeStorage = () => Boolean(window.chrome?.storage?.local);
+  const LOCAL_FALLBACK_KEY = 'tcmh-storage-fallback';
+
   const storageGet = (keys = null) => new Promise((resolve) => {
-    chrome.storage.local.get(keys, (result) => resolve(result || {}));
+    if (hasChromeStorage()) {
+      chrome.storage.local.get(keys, (result) => resolve(result || {}));
+      return;
+    }
+
+    try {
+      const result = JSON.parse(localStorage.getItem(LOCAL_FALLBACK_KEY) || '{}');
+      resolve(result && typeof result === 'object' ? result : {});
+    } catch (_error) {
+      resolve({});
+    }
   });
 
   const storageSet = (payload) => new Promise((resolve) => {
-    chrome.storage.local.set(payload, () => resolve());
+    if (hasChromeStorage()) {
+      chrome.storage.local.set(payload, () => resolve());
+      return;
+    }
+
+    storageGet(null).then((current) => {
+      localStorage.setItem(LOCAL_FALLBACK_KEY, JSON.stringify({
+        ...current,
+        ...(payload || {})
+      }));
+      resolve();
+    });
   });
 
   const storageClear = () => new Promise((resolve) => {
-    chrome.storage.local.clear(() => resolve());
+    if (hasChromeStorage()) {
+      chrome.storage.local.clear(() => resolve());
+      return;
+    }
+
+    localStorage.removeItem(LOCAL_FALLBACK_KEY);
+    resolve();
   });
 
   const getState = async () => {

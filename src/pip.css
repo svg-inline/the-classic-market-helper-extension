@@ -170,7 +170,7 @@ a {
   border-radius: 13px;
   display: grid;
   gap: 4px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 4px;
 }
 
@@ -182,10 +182,13 @@ a {
   color: var(--pip-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 850;
   min-height: 30px;
-  padding: 6px 7px;
+  overflow: hidden;
+  padding: 6px 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pip-tab.is-active {
@@ -373,6 +376,47 @@ a {
   max-height: 338px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.pip-search {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.pip-search__input {
+  appearance: none;
+  background: rgba(2, 6, 23, 0.42);
+  border: 1px solid var(--pip-border);
+  border-radius: 11px;
+  color: var(--pip-text);
+  font: inherit;
+  font-size: 12px;
+  min-height: 34px;
+  min-width: 0;
+  outline: 0;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.pip-search__input:focus {
+  border-color: var(--pip-border-strong);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+}
+
+.pip-search__input::placeholder {
+  color: rgba(148, 163, 184, 0.78);
+}
+
+.pip-search__status {
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: 11px;
+  color: #bae6fd;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 8px 10px;
 }
 
 .pip-item {
@@ -599,7 +643,8 @@ a {
   }
 
   .pip-metric-grid,
-  .pip-actions {
+  .pip-actions,
+  .pip-search {
     grid-template-columns: 1fr;
   }
 
