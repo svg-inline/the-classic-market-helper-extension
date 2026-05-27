@@ -1204,6 +1204,19 @@ const handleMessage = async (message) => {
     return { state: await getState() };
   }
 
+  if (type === 'UPSERT_HISTORY_ITEMS') {
+    const state = await getState();
+    const items = Array.isArray(message.items) ? message.items.filter(Boolean) : [];
+    let history = state.history;
+
+    for (const item of [...items].reverse()) {
+      history = mergeUniqueByKey(history, item, state.settings.maxHistory);
+    }
+
+    await storageSet({ history });
+    return { state: await getState() };
+  }
+
   if (type === 'PIN_ITEM') {
     const state = await getState();
     const item = message.item;

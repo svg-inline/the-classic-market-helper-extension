@@ -90,7 +90,7 @@
     `;
   };
 
-  const itemMatchesSearch = (item, query) => {
+  const itemMatchesSearch = (item, query, exactOnly = false) => {
     const needle = normalizedSearch(query);
 
     if (!needle || !item) {
@@ -106,21 +106,59 @@
       return true;
     }
 
+    if (exactOnly) {
+      return false;
+    }
+
     return [item.item_name, item.item_id, item.q, item.game, snapshot?.itemName]
       .join(' ')
       .toLowerCase()
       .includes(needle);
   };
 
-  const findItemFromSearch = (query) => allItems().find((item) => itemMatchesSearch(item, query)) || null;
+  const findItemFromSearch = (query) => {
+    const items = Array.from(new Map(allItems().map((item) => [itemKey(item), item])).values());
+    const exactMatches = items.filter((item) => itemMatchesSearch(item, query, true));
 
-  const findRelatedFromSearch = (relatedItems, query) => {
+    if (exactMatches.length === 1) {
+      return exactMatches[0];
+    }
+
+    return null;
+  };
+
+  const relatedMatchesFromSearch = (relatedItems, query) => {
     const needle = normalizedSearch(query);
     const related = Array.isArray(relatedItems) ? relatedItems : [];
 
-    return related.find((item) => normalizedSearch(item.item_id) === needle || normalizedSearch(item.item_name) === needle)
-      || related.find((item) => normalizedSearch(item.item_name).startsWith(needle))
-      || (related.length === 1 ? related[0] : null);
+    const exactMatches = related.filter((item) => normalizedSearch(item.item_id) === needle || normalizedSearch(item.item_name) === needle);
+    if (exactMatches.length) {
+      return exactMatches;
+    }
+
+    const prefixMatches = related.filter((item) => normalizedSearch(item.item_name).startsWith(needle));
+    if (prefixMatches.length) {
+      return prefixMatches;
+    }
+
+    return related.length === 1 ? related : [];
+  };
+
+  const itemFromRelatedSearch = (searchItem, relatedItem) => ({
+    ...searchItem,
+    q: '',
+    item_id: relatedItem.item_id,
+    item_name: relatedItem.item_name,
+    iconUrl: relatedItem.iconUrl || '',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+
+  const storeRelatedMatches = async (searchItem, matches) => {
+    const items = matches.map((relatedItem) => itemFromRelatedSearch(searchItem, relatedItem));
+    const response = await sendMessage({ type: 'UPSERT_HISTORY_ITEMS', items });
+    state = response.state || state;
+    return items;
   };
 
   const itemFromSnapshot = (item, snapshot) => {
@@ -198,21 +236,25 @@
 
     setText('itemSearchStatus', 'Buscando item...');
 
-    const searchResult = await refreshAndStoreItem(searchItem);
-    const relatedItem = !searchItem.item_id ? findRelatedFromSearch(searchResult.snapshot?.relatedItems, term) : null;
+    const refreshResponse = await sendMessage({ type: 'REFRESH_ITEM', item: searchItem });
+    const snapshot = refreshResponse.snapshot || null;
+    state = refreshResponse.state || state;
+    const relatedMatches = !searchItem.item_id ? relatedMatchesFromSearch(snapshot?.relatedItems, term) : [];
 
-    if (relatedItem?.item_id) {
-      const directItem = {
-        ...searchItem,
-        q: searchItem.q || relatedItem.item_name,
-        item_id: relatedItem.item_id,
-        item_name: relatedItem.item_name,
-        iconUrl: relatedItem.iconUrl || ''
-      };
+    if (relatedMatches.length > 1) {
+      const storedItems = await storeRelatedMatches(searchItem, relatedMatches);
+      selectedKey = storedItems[0] ? itemKey(storedItems[0]) : selectedKey;
+      setText('itemSearchStatus', `${storedItems.length} resultados encontrados. Selecione o item correto no histórico.`);
+    } else if (relatedMatches.length === 1 && relatedMatches[0]?.item_id) {
+      const directItem = itemFromRelatedSearch(searchItem, relatedMatches[0]);
       await refreshAndStoreItem(directItem);
       setText('itemSearchStatus', 'Resultado encontrado e carregado.');
     } else {
-      setText('itemSearchStatus', searchResult.snapshot?.ok ? 'Item carregado.' : 'Busca aberta no histórico; verifique sua sessão no painel.');
+      const normalizedItem = itemFromSnapshot(searchItem, snapshot);
+      const historyResponse = await sendMessage({ type: 'UPSERT_HISTORY', item: normalizedItem, snapshot });
+      state = historyResponse.state || state;
+      selectedKey = itemKey(normalizedItem);
+      setText('itemSearchStatus', snapshot?.ok ? 'Item carregado.' : 'Busca aberta no histórico; verifique sua sessão no painel.');
     }
 
     render();
@@ -246,7 +288,10 @@
 
   const renderSidebar = () => {
     setText('pinnedCount', String(state.pinned.length));
-    const items = state.pinned.filter((item) => {
+    const sourceItems = searchValue
+      ? Array.from(new Map(allItems().map((item) => [itemKey(item), item])).values())
+      : state.pinned;
+    const items = sourceItems.filter((item) => {
       if (!searchValue) return true;
       return [item.item_name, item.item_id, item.q, item.game].join(' ').toLowerCase().includes(searchValue.toLowerCase());
     });
@@ -265,7 +310,7 @@
           </span>
         </button>
       `;
-    }).join('') : '<div class="empty">Nenhum item fixado.</div>';
+    }).join('') : `<div class="empty">Nenhum item ${searchValue ? 'encontrado' : 'fixado'}.</div>`;
   };
 
   const metricCard = (label, value, modifier = '') => `
@@ -287,6 +332,7 @@
     const url = TcmhMarket.buildMarketUrl(item, state.settings);
     const title = snapshot?.itemName || item.item_name || item.q || item.item_id || key;
     const pinned = isPinned(key);
+    const hasMarketData = Boolean(snapshot?.stats?.itemRows?.length || metrics.latestDate || metrics.averagePrice);
 
     $('#selectedSummary').innerHTML = `
       <section class="panel summary">
@@ -299,6 +345,7 @@
             </div>
           </div>
           <div class="summary__actions">
+            ${hasMarketData ? '' : '<button class="button" type="button" data-action="refresh-selected">Buscar dados</button>'}
             <button class="button button--secondary" type="button" data-action="pin-selected" ${pinned ? 'disabled' : ''}>${pinned ? 'Salvo' : 'Salvar item'}</button>
             <a class="button button--secondary" href="${TcmhMarket.escapeHTML(url)}" target="_blank" rel="noopener noreferrer">Abrir análise</a>
           </div>
@@ -611,6 +658,8 @@
       if (itemButton) { selectedKey = itemButton.dataset.selectKey; render(); return; }
       const pinButton = event.target.closest('[data-action="pin-selected"]');
       if (pinButton) { await pinSelected(); return; }
+      const refreshSelectedButton = event.target.closest('[data-action="refresh-selected"]');
+      if (refreshSelectedButton) { await refreshSelected(); return; }
       const toggle = event.target.closest('[data-alert-toggle]');
       if (toggle) {
         const id = toggle.dataset.alertToggle;
@@ -702,7 +751,7 @@
       const progress = message.progress || null;
       setRefreshProgress(progress);
 
-      if (progress?.scope === 'all' && !progress.itemKey && ['complete', 'error'].includes(progress.phase)) {
+      if (progress && ['success', 'complete', 'error'].includes(progress.phase)) {
         load().then(render).catch(() => {});
       }
     });

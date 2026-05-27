@@ -155,7 +155,7 @@
     return haystack.includes(filterValue.toLowerCase());
   };
 
-  const itemMatchesSearch = (item, query) => {
+  const itemMatchesSearch = (item, query, exactOnly = false) => {
     const needle = normalizedSearch(query);
 
     if (!needle || !item) {
@@ -171,6 +171,10 @@
       return true;
     }
 
+    if (exactOnly) {
+      return false;
+    }
+
     return [item.item_name, item.item_id, item.q, item.game, snapshot?.itemName]
       .join(' ')
       .toLowerCase()
@@ -179,16 +183,48 @@
 
   const findItemFromSearch = (query) => {
     const lists = [currentState?.pinned || [], currentState?.history || []];
-    return lists.flat().find((item) => itemMatchesSearch(item, query)) || null;
+    const items = Array.from(new Map(lists.flat().map((item) => [TcmhMarket.slugKey(item), item])).values());
+    const exactMatches = items.filter((item) => itemMatchesSearch(item, query, true));
+
+    if (exactMatches.length === 1) {
+      return exactMatches[0];
+    }
+
+    return null;
   };
 
-  const findRelatedFromSearch = (relatedItems, query) => {
+  const relatedMatchesFromSearch = (relatedItems, query) => {
     const needle = normalizedSearch(query);
     const related = Array.isArray(relatedItems) ? relatedItems : [];
 
-    return related.find((item) => normalizedSearch(item.item_id) === needle || normalizedSearch(item.item_name) === needle)
-      || related.find((item) => normalizedSearch(item.item_name).startsWith(needle))
-      || (related.length === 1 ? related[0] : null);
+    const exactMatches = related.filter((item) => normalizedSearch(item.item_id) === needle || normalizedSearch(item.item_name) === needle);
+    if (exactMatches.length) {
+      return exactMatches;
+    }
+
+    const prefixMatches = related.filter((item) => normalizedSearch(item.item_name).startsWith(needle));
+    if (prefixMatches.length) {
+      return prefixMatches;
+    }
+
+    return related.length === 1 ? related : [];
+  };
+
+  const itemFromRelatedSearch = (searchItem, relatedItem) => ({
+    ...searchItem,
+    q: '',
+    item_id: relatedItem.item_id,
+    item_name: relatedItem.item_name,
+    iconUrl: relatedItem.iconUrl || '',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  });
+
+  const storeRelatedMatches = async (searchItem, matches) => {
+    const items = matches.map((relatedItem) => itemFromRelatedSearch(searchItem, relatedItem));
+    const response = await sendMessage({ type: 'UPSERT_HISTORY_ITEMS', items });
+    currentState = response.state || currentState;
+    return items;
   };
 
   const itemFromSnapshot = (item, snapshot) => {
@@ -345,23 +381,30 @@
     renderPanel();
 
     try {
-      const searchResult = await refreshAndStoreItem(searchItem);
-      const relatedItem = !searchItem.item_id ? findRelatedFromSearch(searchResult.snapshot?.relatedItems, term) : null;
+      const refreshResponse = await sendMessage({ type: 'REFRESH_ITEM', item: searchItem });
+      const snapshot = refreshResponse.snapshot || null;
+      currentState = refreshResponse.state || currentState;
+      const relatedMatches = !searchItem.item_id ? relatedMatchesFromSearch(snapshot?.relatedItems, term) : [];
 
-      if (relatedItem?.item_id) {
-        const directItem = {
-          ...searchItem,
-          q: searchItem.q || relatedItem.item_name,
-          item_id: relatedItem.item_id,
-          item_name: relatedItem.item_name,
-          iconUrl: relatedItem.iconUrl || ''
-        };
+      if (relatedMatches.length > 1) {
+        const storedItems = await storeRelatedMatches(searchItem, relatedMatches);
+        searchStatus = `${storedItems.length} resultados encontrados. Escolha o item correto no histórico.`;
+        busy = false;
+        renderPanel();
+        return;
+      }
+
+      if (relatedMatches.length === 1 && relatedMatches[0]?.item_id) {
+        const directItem = itemFromRelatedSearch(searchItem, relatedMatches[0]);
         const directResult = await refreshAndStoreItem(directItem);
         navigateToItem(directResult.item);
         return;
       }
 
-      navigateToItem(searchResult.item);
+      const normalizedItem = itemFromSnapshot(searchItem, snapshot);
+      const historyResponse = await sendMessage({ type: 'UPSERT_HISTORY', item: normalizedItem, snapshot });
+      currentState = historyResponse.state || currentState;
+      navigateToItem(normalizedItem);
     } catch (error) {
       searchStatus = `Falha na busca: ${error.message || String(error)}`;
       busy = false;
