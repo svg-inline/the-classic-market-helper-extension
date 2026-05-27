@@ -14,7 +14,9 @@ A extensão roda localmente no navegador, usa a sessão já ativa do usuário no
 - Dashboard full screen em `src/dashboard.html`.
 - Popup rápido com resumo e atalho para atualizar os itens fixados.
 - Fixar/remover itens monitorados.
-- Busca direta por nome ou ID pela dashboard e pelo painel flutuante.
+- Busca direta por nome ou ID pela dashboard, pelo painel flutuante e pelo PiP.
+- Busca textual ampla por `q`, com múltiplos resultados relacionados capturados do bloco **Resultados da pesquisa**.
+- Normalização de busca que ignora acentos, estrelas, pontuação e conectores como `de`, priorizando itens com `item_id` real.
 - Captura de nome real, ID, ícone, link e itens relacionados a partir do HTML do painel.
 - Atualização manual de um item ou de todos os fixados.
 - Atualização automática por `chrome.alarms`.
@@ -22,7 +24,7 @@ A extensão roda localmente no navegador, usa a sessão já ativa do usuário no
 - Histórico diário por item com tabela, gráfico SVG local e cópia em CSV.
 - Alertas de preço/volume/variação com notificações locais e cooldown.
 - Exportar/importar JSON com configurações, fixados, histórico, snapshots e alertas.
-- Janela compacta do item principal via Document Picture-in-Picture quando disponível, com fallback em popup.
+- Janela compacta via Document Picture-in-Picture quando disponível, com fallback em popup, incluindo abas **Principal**, **Monitorados**, **Busca** e **Alertas**.
 
 ## Instalação local
 
@@ -39,7 +41,7 @@ A extensão roda localmente no navegador, usa a sessão já ativa do usuário no
 1. Abra um item no painel de Market Analysis.
 2. Use o painel flutuante para fixar o item atual.
 3. Abra o dashboard pelo popup da extensão ou pelo botão do painel flutuante.
-4. Pesquise novos itens por nome ou ID.
+4. Pesquise novos itens por nome ou ID. Termos amplos, como `lin yun`, mostram candidatos relacionados para escolha.
 5. Ajuste intervalo, janela de datas e notificações na aba **Configuração**.
 6. Crie alertas na aba **Alertas de preço**.
 7. Exporte um backup JSON quando quiser migrar ou guardar os dados locais.
@@ -61,6 +63,8 @@ A extensão não salva login, senha, cookies ou tokens. Ela também não envia d
 
 O parser lê o HTML retornado pelo painel e prioriza os arrays JavaScript inline `rows` e `currencyRows`, usados pelos gráficos da página. Quando esses arrays não existem, usa fallback textual com menor precisão.
 
+Em execução normal, os dados ficam em `chrome.storage.local`. Para abrir telas HTML localmente fora do contexto da extensão durante testes, `src/storage.js` usa um fallback em `localStorage`.
+
 Permissões atuais:
 
 - `storage`: salvar configurações e dados locais;
@@ -77,7 +81,7 @@ src/
   background.js       # service worker, fetch, alarmes, fila e alertas
   content-script.js   # painel flutuante na página do painel
   market.js           # parser, formatadores e construção de URLs
-  storage.js          # defaults e helpers de chrome.storage.local
+  storage.js          # defaults, chrome.storage.local e fallback localStorage para teste local
   dashboard.html/js   # dashboard full screen
   popup.html/js       # popup da extensão
   pip.html/js         # fallback compacto para PiP/popup

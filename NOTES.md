@@ -65,6 +65,40 @@ game:item_id
 
 Se o item ainda veio de uma busca textual sem ID, a chave temporária usa `game:q`.
 
+Para teste local fora do contexto da extensão, `src/storage.js` detecta ausência de `chrome.storage.local` e usa `localStorage` com a chave `tcmh-storage-fallback`. Esse fallback existe apenas para renderizar páginas HTML locais durante desenvolvimento; a extensão instalada continua usando `chrome.storage.local`.
+
+## Busca textual e resultados relacionados
+
+A busca direta tem dois caminhos:
+
+- termo numérico: cria URL com `item_id`;
+- termo textual: cria URL com `q` e lê o bloco **Resultados da pesquisa** retornado pelo painel.
+
+Exemplo textual:
+
+```txt
+/panel/market-analysis?game=pw126&q=lin+yun&start_date=21%2F04%2F2026&end_date=20%2F05%2F2026
+```
+
+Para termos amplos, a extensão deve salvar/listar múltiplos candidatos relacionados, não escolher automaticamente um item genérico salvo localmente sem ID. Um item local só encerra a busca direta se tiver `item_id` real ou se o snapshot indicar `stats.latest.item_id`.
+
+A normalização de busca em `src/market.js`:
+
+- remove acentos;
+- ignora `★`, `☆`, `#` e pontuação;
+- ignora conectores como `de`, `do`, `da`;
+- compara tokens relevantes;
+- reduz prioridade de prefixos como `Molde:`, mas mantém esses itens na lista quando combinam com a busca ampla.
+
+Exemplo esperado para `lin yun`:
+
+```txt
+★Anel de Lin Yun #8384
+☆☆Braceletes de Lin Yun #12572
+☆☆Armadura Leve de Lin Yun #12573
+Molde: Anel de Lin Yun #13153
+```
+
 ## Atualização
 
 O background usa `chrome.alarms` para agendamento e uma fila persistida em `refreshJob` para atualizar vários itens. Entre requisições ao painel existe um atraso aleatório de 30 a 60 segundos, reduzindo rajadas de fetch.

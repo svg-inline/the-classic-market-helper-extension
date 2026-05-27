@@ -26,6 +26,7 @@ Principais funções:
 
 - monitorar itens específicos;
 - buscar item diretamente por ID ou nome, sem selecionar manualmente no painel;
+- listar múltiplos resultados relacionados quando a busca textual for ampla;
 - buscar dados da página em background;
 - extrair preços do HTML;
 - salvar histórico diário de preços;
@@ -33,7 +34,7 @@ Principais funções:
 - exibir dashboard full screen;
 - exibir painel flutuante na página;
 - exportar/importar dados locais;
-- abrir um monitor compacto em Document Picture-in-Picture para o item principal.
+- abrir um monitor compacto em Document Picture-in-Picture com abas para item principal, monitorados, busca e alertas.
 
 ## 3. O que a extensão não faz
 
@@ -68,7 +69,7 @@ A extensão é mais adequada porque:
 
 ## 5. Arquitetura geral
 
-Arquitetura implementada na versão 0.3.0:
+Arquitetura implementada na linha 0.3.x:
 
 ```txt
 Chrome/Edge Extension Manifest V3
@@ -79,7 +80,7 @@ Chrome/Edge Extension Manifest V3
     ├── background.js          # Service Worker, fetch, alarmes, fila e alertas
     ├── content-script.js      # Roda dentro da página do painel
     ├── market.js              # Parser, formatadores e construção de URLs
-    ├── storage.js             # Defaults e camada de persistência local
+    ├── storage.js             # Defaults, chrome.storage.local e fallback localStorage para teste local
     ├── dashboard.html
     ├── dashboard.js           # Dashboard full screen
     ├── dashboard.css
@@ -106,7 +107,7 @@ Content-script lê URL, DOM e estado da página atual
         ↓
 Usuário fixa ou monitora item
         ↓
-Opcionalmente busca item por ID/nome pela dashboard ou painel flutuante
+Opcionalmente busca item por ID/nome pela dashboard, PiP ou painel flutuante
         ↓
 Background faz fetch periódico do HTML usando a sessão ativa
         ↓
@@ -971,11 +972,15 @@ Regra prática:
 
 - `history` é limitado por `settings.maxHistory`;
 - `pinned` pode guardar até 500 itens;
+- buscas textuais amplas podem adicionar vários itens ao `history` em uma única operação;
+- itens temporários criados por `q` não devem ser tratados como seleção final quando não houver `item_id` real;
 - cada atualização substitui o snapshot do item pela versão mais recente;
 - as linhas diárias continuam disponíveis dentro do snapshot enquanto fizerem parte do período consultado no painel;
 - se `dateMode` for `rolling`, a janela de datas é recalculada antes da busca.
 
 Se for necessário guardar histórico acumulado além da janela consultada, a evolução natural é adicionar uma estrutura persistente por `itemKey` e `stat_date`, mas isso não faz parte da 0.3.0.
+
+Observação de desenvolvimento: fora do contexto da extensão, `chrome.storage.local` não existe. Para permitir abrir `dashboard.html`/`pip.html` localmente durante testes visuais, `src/storage.js` usa `localStorage` com a chave `tcmh-storage-fallback` quando detecta ausência da API Chrome. Esse caminho não substitui o storage real da extensão instalada.
 
 ## 25. Alertas de preço
 
@@ -1120,7 +1125,7 @@ Usuário clica “Abrir PiP”
         ↓
 Extensão abre janela compacta
         ↓
-PiP mostra item principal
+PiP mostra abas Principal, Monitorados, Busca e Alertas
         ↓
 Dashboard/background continua atualizando dados
         ↓
@@ -1130,14 +1135,29 @@ PiP recebe atualização por mensagem ou storage listener
 Conteúdo ideal do PiP:
 
 ```txt
-Nome do item
-ID
-Última média
-Mín / Máx
-Trades
-Compras / Vendas
-Variação no período
-Última atualização
+Principal:
+- nome do item;
+- ID;
+- última média;
+- mín / máx;
+- trades;
+- compras / vendas;
+- variação no período;
+- última atualização.
+
+Monitorados:
+- lista compacta dos itens fixados;
+- ícone;
+- mínimo, médio e máximo.
+
+Busca:
+- campo por nome ou ID;
+- resultados locais enquanto digita;
+- busca direta por `item_id` ou `q` ao confirmar.
+
+Alertas:
+- lista de alertas ativos;
+- condição, alvo e último disparo.
 ```
 
 Limitações:
@@ -1146,7 +1166,7 @@ Limitações:
 - exige ação do usuário para abrir;
 - a janela PiP depende da aba/contexto original;
 - não é ideal para lista grande;
-- deve mostrar apenas 1 item principal.
+- deve manter conteúdo compacto e evitar operações pesadas de UI.
 
 ## 29. Busca local e busca direta dentro da extensão
 
@@ -1189,22 +1209,34 @@ const filterWatchedItems = (items, search) => {
 Implementação atual:
 
 - `src/dashboard.html` possui o formulário `#itemSearchForm`;
+- `src/pip.js` possui uma aba **Busca** com formulário `data-role="pip-search-form"`;
 - `content-script.js` renderiza um formulário no card flutuante com `data-role="search-form"`;
 - o campo continua filtrando itens locais no evento `input`;
 - o submit chama a busca direta;
-- se o termo bater com item salvo em `pinned` ou `history`, esse item é selecionado/aberto;
+- se o termo bater com item salvo em `pinned` ou `history` e esse item tiver `item_id` real, esse item é selecionado/aberto;
+- se o termo bater apenas com um item local textual sem `item_id`, a busca direta continua e consulta o painel usando `q`;
 - se o termo for numérico, é tratado como `item_id`;
 - se o termo for texto, é tratado como `q`;
-- o item buscado é salvo no histórico via `UPSERT_HISTORY`.
+- resultados relacionados encontrados pelo bloco **Resultados da pesquisa** são salvos no histórico via `UPSERT_HISTORY_ITEMS`;
+- quando há um único resultado específico, a extensão pode refazer a busca por `item_id` e salvar via `UPSERT_HISTORY`;
 - o item pesquisado pode ser fixado na dashboard pelo botão `Salvar item`.
 
 Normalização do termo:
 
 ```js
 const normalizedSearch = (value) => {
-  return normalizeSpace(value).replace(/^#/, '').toLowerCase();
+  return searchTokens(value).join(' ');
 };
 ```
+
+Regras atuais da normalização em `src/market.js`:
+
+- remove acentos;
+- ignora `★`, `☆`, `#` e pontuação;
+- ignora conectores como `de`, `do`, `da`, `e`;
+- compara tokens relevantes;
+- usa `searchMatchScore` para ranquear resultados;
+- usa `hasConcreteItemId` para impedir que um item local textual e genérico encerre uma busca direta.
 
 Criação de item temporário para busca direta:
 
@@ -1271,17 +1303,36 @@ Fluxo implementado para busca direta por nome:
 1. Criar item temporário com q={termo}.
 2. Fazer REFRESH_ITEM para buscar o HTML da página de análise.
 3. Ler relatedItems/resultados capturados do HTML.
-4. Se houver resultado compatível, criar novo item com item_id real.
-5. Fazer REFRESH_ITEM novamente usando item_id.
-6. Normalizar `item_id`, `item_name` e `iconUrl` a partir do snapshot.
-7. Salvar snapshot e item normalizado no histórico.
-8. Selecionar o item na dashboard ou navegar o card flutuante para a URL real.
-9. Se o usuário clicar em `Salvar item`, gravar em `pinned` via `PIN_ITEM`.
+4. Normalizar e ranquear candidatos com searchMatchScore.
+5. Se houver múltiplos candidatos compatíveis, salvar todos no histórico via UPSERT_HISTORY_ITEMS.
+6. Se houver um único candidato específico, criar novo item com item_id real.
+7. Fazer REFRESH_ITEM novamente usando item_id.
+8. Normalizar `item_id`, `item_name` e `iconUrl` a partir do snapshot.
+9. Salvar snapshot e item normalizado no histórico.
+10. Selecionar o item na dashboard/PiP ou navegar o card flutuante para a URL real.
+11. Se o usuário clicar em `Salvar item`, gravar em `pinned` via `PIN_ITEM`.
 ```
+
+Exemplo de busca ampla:
+
+```txt
+/panel/market-analysis?game=pw126&q=lin+yun&start_date=21%2F04%2F2026&end_date=20%2F05%2F2026
+```
+
+Resultado esperado capturado do HTML:
+
+```txt
+★Anel de Lin Yun #8384
+☆☆Braceletes de Lin Yun #12572
+☆☆Armadura Leve de Lin Yun #12573
+Molde: Anel de Lin Yun #13153
+```
+
+Nesse caso a extensão não deve escolher automaticamente um item local chamado apenas `lin yun` sem `item_id`. Ela deve preservar os candidatos com ID real para o usuário escolher o item correto.
 
 Não usar somente o modo textual para histórico de preço quando houver resultado com `item_id`, porque os dados completos de preço vêm melhor quando há `item_id` selecionado.
 
-No dashboard, a busca direta não precisa navegar a aba atual: ela carrega o snapshot em background e seleciona o item. No painel flutuante, a busca direta navega a página para a URL montada, preservando a experiência de continuar no painel real.
+No dashboard e no PiP, a busca direta não precisa navegar a aba atual: ela carrega o snapshot em background e seleciona/lista o item. No painel flutuante, a busca direta navega a página para a URL montada quando há um item específico, preservando a experiência de continuar no painel real.
 
 ## 31. Parser completo sugerido
 
@@ -1560,7 +1611,10 @@ A extensão está correta quando:
 - injeta painel flutuante na página de análise;
 - fixa item atual;
 - busca item por ID ou nome pela dashboard;
+- busca item por ID ou nome pelo PiP;
 - busca item por ID ou nome pelo painel flutuante;
+- preserva múltiplos resultados reais quando a busca textual é ampla;
+- não seleciona como definitivo um item textual sem `item_id` quando existem candidatos com ID no painel;
 - exibe nome real e ícone do item quando o HTML fornece esses dados;
 - permite salvar item pesquisado em Monitorados sem precisar buscar novamente;
 - monitora item por `game:item_id`;
@@ -1608,7 +1662,7 @@ Exportar/importar
 Busca local
 Busca direta por ID/nome
 Configuração de intervalo
-Document PiP/fallback compacto
+Document PiP/fallback compacto com abas
 Notificações locais
 ```
 
