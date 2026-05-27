@@ -68,25 +68,31 @@ A extensão é mais adequada porque:
 
 ## 5. Arquitetura geral
 
-Arquitetura recomendada:
+Arquitetura implementada na versão 0.3.0:
 
 ```txt
 Chrome/Edge Extension Manifest V3
 
 ├── manifest.json
-├── background.js              # Service Worker
-├── content-script.js          # Roda dentro da página do painel
-├── parser.js                  # Extratores de HTML/scripts
-├── storage.js                 # Camada de persistência local
-├── dashboard.html
-├── dashboard.js               # Dashboard full screen
-├── popup.html
-├── popup.js
-├── options.html
-├── options.js
-├── pip.html                   # UI compacta para Document PiP
-├── pip.js
-└── styles.css
+├── icons/
+└── src/
+    ├── background.js          # Service Worker, fetch, alarmes, fila e alertas
+    ├── content-script.js      # Roda dentro da página do painel
+    ├── market.js              # Parser, formatadores e construção de URLs
+    ├── storage.js             # Defaults e camada de persistência local
+    ├── dashboard.html
+    ├── dashboard.js           # Dashboard full screen
+    ├── dashboard.css
+    ├── popup.html
+    ├── popup.js
+    ├── popup.css
+    ├── options.html           # Tela legada/auxiliar de opções
+    ├── options.js
+    ├── options.css
+    ├── pip.html               # UI compacta para fallback/PiP
+    ├── pip.js
+    ├── pip.css
+    └── content.css
 ```
 
 Fluxo principal:
@@ -113,23 +119,31 @@ Dashboard, popup, painel flutuante e PiP exibem os dados
 
 ## 6. Permissões necessárias no Manifest V3
 
-Base sugerida:
+Manifest atual:
 
 ```json
 {
   "manifest_version": 3,
   "name": "The Classic Market Helper",
+  "description": "Dashboard full screen, alertas, histórico, PiP e atualização local de preços para o painel de Market Analysis do The Classic Games.",
   "version": "0.3.0",
+  "minimum_chrome_version": "114",
   "permissions": [
     "storage",
     "alarms",
-    "tabs"
+    "notifications"
   ],
   "host_permissions": [
     "https://userpanel.theclassic.games/*"
   ],
+  "action": {
+    "default_title": "The Classic Market Helper",
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/dashboard.html",
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "src/background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
@@ -137,19 +151,16 @@ Base sugerida:
         "https://userpanel.theclassic.games/panel/market-analysis*"
       ],
       "js": [
-        "parser.js",
-        "content-script.js"
+        "src/storage.js",
+        "src/market.js",
+        "src/content-script.js"
       ],
       "css": [
-        "styles.css"
+        "src/content.css"
       ],
       "run_at": "document_idle"
     }
-  ],
-  "action": {
-    "default_popup": "popup.html"
-  },
-  "options_page": "dashboard.html"
+  ]
 }
 ```
 
@@ -159,7 +170,7 @@ Permissões explicadas:
 |---|---|
 | `storage` | Salvar itens monitorados, histórico, alertas e configurações. |
 | `alarms` | Executar atualização em intervalos definidos. |
-| `tabs` | Abrir dashboard, focar aba do painel ou ler URL ativa quando necessário. |
+| `notifications` | Emitir notificações locais de alertas e falhas/sucessos de atualização, conforme configuração. |
 | `host_permissions` | Permitir fetch/leitura do domínio `userpanel.theclassic.games`. |
 
 ## 7. Como a extensão usa login/sessão
@@ -310,16 +321,20 @@ const fetchMarketHtml = async (url) => {
 
 A extensão deve permitir intervalos grandes e controlados, para evitar excesso de requests.
 
-Opções sugeridas:
+Opções implementadas:
 
 ```txt
 Manual
 A cada 5 horas
-1 vez ao dia
-2 vezes ao dia
 3 vezes ao dia
+2 vezes ao dia
+1 vez ao dia
 A cada 2 dias
 A cada 3 dias
+A cada 7 dias
+A cada 15 dias
+A cada 30 dias
+Intervalo personalizado em horas
 ```
 
 Com `chrome.alarms`:
@@ -335,11 +350,18 @@ Para intervalos como 1, 2 ou 3 vezes ao dia, use minutos equivalentes:
 | Opção | `periodInMinutes` |
 |---|---:|
 | A cada 5 horas | `300` |
-| 1 vez ao dia | `1440` |
-| 2 vezes ao dia | `720` |
 | 3 vezes ao dia | `480` |
+| 2 vezes ao dia | `720` |
+| 1 vez ao dia | `1440` |
 | A cada 2 dias | `2880` |
 | A cada 3 dias | `4320` |
+| A cada 7 dias | `10080` |
+| A cada 15 dias | `21600` |
+| A cada 30 dias | `43200` |
+
+Na implementação atual, as opções são guardadas como `refreshPreset` e resolvidas em horas por `REFRESH_PRESETS`. O service worker agenda `chrome.alarms` com `periodInMinutes` calculado a partir dessas horas.
+
+Para atualizações de vários itens, a versão 0.3.0 usa uma fila (`refreshJob`) e aplica um atraso aleatório de 30 a 60 segundos entre fetches do painel.
 
 ## 12. Onde os preços estão no HTML
 
@@ -823,64 +845,61 @@ const buildItemSummary = (rows) => {
 
 Usar `chrome.storage.local`.
 
-Estrutura sugerida:
+Estrutura usada pela implementação atual:
 
 ```json
 {
+  "schemaVersion": 2,
   "settings": {
-    "refreshIntervalMinutes": 300,
-    "defaultGame": "pw126",
-    "defaultPeriodDays": 30,
-    "maxHistoryDays": 180
+    "autoRefreshEnabled": true,
+    "refreshPreset": "every_5_hours",
+    "customHours": 24,
+    "dateMode": "saved",
+    "rollingDays": 30,
+    "maxHistory": 50,
+    "notifyOnRefreshError": true,
+    "notifyOnRefreshSuccess": false,
+    "alertNotificationsEnabled": true,
+    "alertCooldownHours": 6
   },
-  "watchedItems": [
+  "pinned": [
     {
-      "id": "pw126:11208",
       "game": "pw126",
-      "itemId": "11208",
-      "name": "Pedra Imortal",
       "q": "PEDRA",
+      "item_id": "11208",
+      "item_name": "Pedra Imortal",
       "iconUrl": "https://theclassic.games/assets/img/iconpw126/11208.png",
-      "databaseUrl": "https://pwdatabase.theclassic.games/search/item/11208",
-      "enabled": true,
-      "favorite": true,
+      "start_date": "26/04/2026",
+      "end_date": "26/05/2026",
       "createdAt": 1779830000000,
       "updatedAt": 1779830000000,
-      "lastFetchAt": 1779830000000,
-      "lastStatus": "ok"
+      "lastRefreshAt": 1779830000000,
+      "lastRefreshOk": true
     }
   ],
-  "priceHistory": {
-    "pw126:11208": [
-      {
-        "date": "2026-05-20",
-        "avgPrice": 81011.5984,
-        "medianPrice": 81700,
-        "minPrice": 75000,
-        "maxPrice": 85900,
-        "filteredTrades": 127,
-        "buyTrades": 35,
-        "sellTrades": 92,
-        "totalGold": 259841031,
-        "updatedAt": "2026-05-20 07:20:12",
-        "capturedAt": 1779830000000
-      }
-    ]
-  },
+  "history": [],
+  "snapshots": {},
   "alerts": [
     {
       "id": "alert-1",
-      "itemKey": "pw126:11208",
-      "type": "below",
-      "targetPrice": 75000,
       "enabled": true,
-      "lastTriggeredAt": null
+      "itemKey": "pw126:11208",
+      "itemName": "Pedra Imortal",
+      "condition": "avg_below",
+      "target": 75000,
+      "createdAt": 1779830000000,
+      "updatedAt": 1779830000000,
+      "lastTriggeredAt": null,
+      "lastMessage": ""
     }
-  ]
+  ],
+  "lastRefresh": null,
+  "lastRefreshStatus": "never",
+  "refreshJob": null
 }
 ```
 
-Modelo usado pela implementação atual:
+Exemplo de item e snapshot salvo:
 
 ```json
 {
@@ -937,66 +956,62 @@ Motivo: o mesmo `item_id` pode teoricamente existir em jogos diferentes.
 
 ## 24. Histórico de preços
 
-A extensão deve salvar snapshots por data.
+A implementação atual não mantém uma tabela separada `priceHistory`. O histórico diário exibido no dashboard vem de `snapshots[itemKey].stats.itemRows`, que é a lista normalizada dos objetos diários extraídos de `rows`.
 
-Regra:
+Separação de responsabilidades:
 
-- se já existir registro da mesma data, atualizar;
-- se for data nova, adicionar;
-- ordenar por data crescente;
-- limitar por `maxHistoryDays`.
+| Campo | Função |
+|---|---|
+| `history` | Lista de itens já pesquisados/acessados para busca local e navegação rápida. |
+| `pinned` | Lista de itens monitorados/fixados. |
+| `snapshots[itemKey]` | Último snapshot parseado de cada item, incluindo métricas formatadas e linhas diárias. |
+| `snapshots[itemKey].stats.itemRows` | Série diária usada para tabela, gráfico e CSV. |
 
-Exemplo:
+Regra prática:
 
-```js
-const upsertHistoryRow = (history, itemKey, row) => {
-  const currentRows = history[itemKey] || [];
-  const nextRows = currentRows.filter((entry) => entry.date !== row.date);
+- `history` é limitado por `settings.maxHistory`;
+- `pinned` pode guardar até 500 itens;
+- cada atualização substitui o snapshot do item pela versão mais recente;
+- as linhas diárias continuam disponíveis dentro do snapshot enquanto fizerem parte do período consultado no painel;
+- se `dateMode` for `rolling`, a janela de datas é recalculada antes da busca.
 
-  nextRows.push({
-    ...row,
-    capturedAt: Date.now(),
-  });
-
-  nextRows.sort((a, b) => a.date.localeCompare(b.date));
-
-  history[itemKey] = nextRows.slice(-180);
-
-  return history;
-};
-```
+Se for necessário guardar histórico acumulado além da janela consultada, a evolução natural é adicionar uma estrutura persistente por `itemKey` e `stat_date`, mas isso não faz parte da 0.3.0.
 
 ## 25. Alertas de preço
 
-Tipos de alerta:
+Condições de alerta implementadas:
 
 ```txt
-below: avisar quando o preço médio ficar abaixo de X
-above: avisar quando o preço médio ficar acima de X
-change_percent: avisar quando variar mais de X% no período
+avg_above: última média acima do alvo
+avg_below: última média abaixo do alvo
+median_above: última mediana acima do alvo
+median_below: última mediana abaixo do alvo
+trades_above: trades filtrados do último dia acima do alvo
+variation_above: variação média do período acima do alvo percentual
+variation_below: variação média do período abaixo do alvo percentual
 ```
 
 Exemplo:
 
 ```js
-const shouldTriggerAlert = (alert, summary) => {
-  if (!alert.enabled || !summary) {
+const ALERT_CONDITIONS = {
+  avg_above: { metric: 'latestAvg', op: '>=' },
+  avg_below: { metric: 'latestAvg', op: '<=' },
+  median_above: { metric: 'latestMedian', op: '>=' },
+  median_below: { metric: 'latestMedian', op: '<=' },
+  trades_above: { metric: 'latestTrades', op: '>=' },
+  variation_above: { metric: 'trendPct', op: '>=' },
+  variation_below: { metric: 'trendPct', op: '<=' },
+};
+
+const evaluateCondition = (value, condition, target) => {
+  const config = ALERT_CONDITIONS[condition];
+
+  if (!config) {
     return false;
   }
 
-  if (alert.type === 'below') {
-    return summary.lastAvgPrice <= alert.targetPrice;
-  }
-
-  if (alert.type === 'above') {
-    return summary.lastAvgPrice >= alert.targetPrice;
-  }
-
-  if (alert.type === 'change_percent') {
-    return Math.abs(summary.percentChange) >= alert.targetPercent;
-  }
-
-  return false;
+  return config.op === '>=' ? value >= target : value <= target;
 };
 ```
 
@@ -1005,14 +1020,16 @@ Para notificação visual, usar:
 - badge no popup;
 - lista no dashboard;
 - painel flutuante;
-- opcionalmente `chrome.notifications`, se a permissão for adicionada.
+- `chrome.notifications`, que já está no Manifest V3.
+
+Cada alerta respeita `alertCooldownHours` para evitar notificações repetidas em sequência.
 
 ## 26. Dashboard full screen
 
 O dashboard deve ser uma página da extensão:
 
 ```txt
-chrome-extension://{extension-id}/dashboard.html
+chrome-extension://{extension-id}/src/dashboard.html
 ```
 
 Entradas para abrir:
@@ -1171,7 +1188,7 @@ const filterWatchedItems = (items, search) => {
 
 Implementação atual:
 
-- `dashboard.html` possui o formulário `#itemSearchForm`;
+- `src/dashboard.html` possui o formulário `#itemSearchForm`;
 - `content-script.js` renderiza um formulário no card flutuante com `data-role="search-form"`;
 - o campo continua filtrando itens locais no evento `input`;
 - o submit chama a busca direta;
@@ -1428,11 +1445,13 @@ Chaves permitidas:
 
 ```txt
 settings
-watchedItems
-priceHistory
+pinned
+history
+snapshots
 alerts
-categories
 ```
+
+O JSON exportado pela versão atual também inclui `exportedAt` e `schemaVersion` como metadados. Na importação, a extensão mistura `settings` importado com os defaults atuais e substitui apenas listas/objetos conhecidos quando eles têm o tipo esperado.
 
 ## 37. Logs técnicos
 
@@ -1498,7 +1517,9 @@ Cuidados:
 - limitar histórico;
 - recalcular dashboard sob demanda ou com debounce.
 
-Fila simples com throttle:
+Na versão atual, a atualização em lote usa `refreshJob` em `chrome.storage.local` e um alarme auxiliar `tcmh-refresh-queue`. Isso permite retomar uma atualização em andamento e evita disparar muitos fetches em sequência.
+
+Versão conceitual do throttle:
 
 ```js
 const randomDelayMs = () => 30000 + Math.round(Math.random() * 30000);
@@ -1548,14 +1569,16 @@ A extensão está correta quando:
 - salva histórico diário por item;
 - exibe última média, média do período, variação e trades;
 - permite configurar intervalo de atualização;
+- usa fila/throttle para atualização de vários itens;
 - exporta/importa dados;
-- alerta quando preço cruza regra configurada;
+- alerta quando preço, trades ou variação cruzam regra configurada;
+- respeita cooldown de alerta e configurações de notificação;
 - não salva login, senha, cookie ou token;
 - não executa scripts do HTML buscado.
 
 ## 42. Roadmap técnico
 
-### Fase 1 — Base funcional
+### Fase 1 — Base funcional implementada
 
 ```txt
 Content-script
@@ -1563,10 +1586,10 @@ Painel flutuante
 Fixar item atual
 Parser de URL e DOM
 Storage local
-Dashboard básico
+Dashboard básico/full screen
 ```
 
-### Fase 2 — Monitoramento
+### Fase 2 — Monitoramento implementado
 
 ```txt
 Background fetch
@@ -1574,24 +1597,25 @@ chrome.alarms
 Parser de rows/currencyRows
 Histórico diário
 Status da última atualização
+Fila de atualização com throttle
 ```
 
-### Fase 3 — Produto utilizável
+### Fase 3 — Produto utilizável implementado parcialmente
 
 ```txt
 Alertas de preço
 Exportar/importar
 Busca local
 Busca direta por ID/nome
-Categorias/tags
 Configuração de intervalo
+Document PiP/fallback compacto
+Notificações locais
 ```
 
-### Fase 4 — Experiência avançada
+Pendente ou futuro:
 
 ```txt
-Dashboard full screen refinado
-Document PiP
+Categorias/tags
 Comparação entre itens
 Gráficos próprios da extensão
 Logs técnicos
