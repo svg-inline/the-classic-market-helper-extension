@@ -5,6 +5,9 @@ const REFRESH_QUEUE_ALARM_NAME = "tcmh-refresh-queue";
 const FETCH_THROTTLE_MIN_MS = 10 * 1000;
 const FETCH_THROTTLE_MAX_MS = 20 * 1000;
 const FETCH_TIMEOUT_MS = 90 * 1000;
+const REMOTE_CACHE_BASE_URL = "https://the-classic-marketplace.vercel.app";
+const REMOTE_CACHE_API_KEY = "slfEiJRh2aaW8UpcATZJ7bktHHSVRfI0";
+const REMOTE_CACHE_ENABLED = true;
 let nextFetchAllowedAt = 0;
 let fetchThrottleQueue = Promise.resolve();
 
@@ -168,6 +171,112 @@ const escapeRegExp = (value) =>
   String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const slugKey = (item) =>
   `${item.game || "pw126"}:${item.item_id || item.q || "unknown"}`;
+const remoteCacheBaseUrl = () => REMOTE_CACHE_BASE_URL.replace(/\/+$/, "");
+
+const remoteItemId = (item = {}, snapshot = null) =>
+  String(item.item_id || snapshot?.stats?.latest?.item_id || "").trim();
+
+const remoteItemPath = (item, snapshot = null) => {
+  const game = encodeURIComponent(item?.game || "pw126");
+  const itemId = encodeURIComponent(remoteItemId(item, snapshot));
+  return `/api/market/items/${game}/${itemId}`;
+};
+
+const sanitizeRemoteItem = (item = {}, snapshot = null) => ({
+  game: item.game || "pw126",
+  item_id: remoteItemId(item, snapshot),
+  item_name:
+    item.item_name || item.itemName || snapshot?.itemName || item.q || "",
+  q: item.q || "",
+  iconUrl: item.iconUrl || item.icon_url || snapshot?.iconUrl || "",
+  start_date: item.start_date || "",
+  end_date: item.end_date || "",
+});
+
+const sanitizeRemoteSnapshot = (snapshot = {}) => {
+  const {
+    rawTextPreview: _rawTextPreview,
+    html: _html,
+    rawHtml: _rawHtml,
+    ...safeSnapshot
+  } = snapshot || {};
+  return safeSnapshot;
+};
+
+const normalizeRemoteSnapshot = (item, remoteSnapshot) => {
+  const raw = remoteSnapshot?.raw || remoteSnapshot;
+
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const fetchedAt =
+    remoteSnapshot?.fetched_at || raw.fetched_at || raw.capturedAt;
+  const capturedAt = fetchedAt ? new Date(fetchedAt).getTime() : raw.capturedAt;
+
+  return {
+    ...raw,
+    capturedAt: Number.isFinite(capturedAt) ? capturedAt : Date.now(),
+    sourceUrl: remoteSnapshot?.source_url || raw.sourceUrl || buildMarketUrl(item),
+    fromRemoteCache: true,
+  };
+};
+
+const readRemoteCache = async (item) => {
+  if (!REMOTE_CACHE_ENABLED || !remoteItemId(item)) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `${remoteCacheBaseUrl()}${remoteItemPath(item)}`,
+      {
+        method: "GET",
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json();
+    return payload?.data || null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+const writeRemoteSnapshot = async (item, snapshot) => {
+  if (!REMOTE_CACHE_ENABLED || !remoteItemId(item, snapshot) || !snapshot?.ok) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `${remoteCacheBaseUrl()}${remoteItemPath(item, snapshot)}/snapshot`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-tcmh-api-key": REMOTE_CACHE_API_KEY,
+        },
+        body: JSON.stringify({
+          item: sanitizeRemoteItem(item, snapshot),
+          snapshot: sanitizeRemoteSnapshot(snapshot),
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return response.json();
+  } catch (_error) {
+    return null;
+  }
+};
 
 const decodeHTML = (value) =>
   String(value || "")
@@ -839,6 +948,21 @@ const fetchSnapshotForItemNow = async (item, settings) => {
   return snapshot;
 };
 
+const fetchSnapshotWithRemoteCache = async (item, settings) => {
+  const remote = await readRemoteCache(item);
+
+  if (remote?.fresh && remote.snapshot) {
+    const snapshot = normalizeRemoteSnapshot(item, remote.snapshot);
+    if (snapshot?.ok) {
+      return snapshot;
+    }
+  }
+
+  const snapshot = await fetchSnapshotForItemNow(item, settings);
+  await writeRemoteSnapshot(item, snapshot);
+  return snapshot;
+};
+
 const fetchSnapshotForItem = async (item, settings, progress = null) => {
   const progressOptions = progress
     ? {
@@ -860,7 +984,7 @@ const fetchSnapshotForItem = async (item, settings, progress = null) => {
     : {};
 
   return runWithFetchThrottle(
-    () => fetchSnapshotForItemNow(item, settings),
+    () => fetchSnapshotWithRemoteCache(item, settings),
     progressOptions,
   );
 };
@@ -1265,7 +1389,7 @@ const processRefreshQueue = async () => {
   let failed = Number(job.failed || 0);
 
   try {
-    snapshot = await fetchSnapshotForItemNow(item, state.settings);
+    snapshot = await fetchSnapshotWithRemoteCache(item, state.settings);
     if (snapshot.ok) {
       success += 1;
     } else {

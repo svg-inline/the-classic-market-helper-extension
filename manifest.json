@@ -10,7 +10,8 @@
     "notifications"
   ],
   "host_permissions": [
-    "https://userpanel.theclassic.games/*"
+    "https://userpanel.theclassic.games/*",
+    "https://the-classic-marketplace.vercel.app/*"
   ],
   "action": {
     "default_title": "The Classic Market Helper",
