@@ -537,7 +537,6 @@
     const related = snapshot?.relatedItems || [];
     $("#relatedItems").innerHTML = related.length
       ? related
-          .slice(0, 12)
           .map(
             (item) => `
       <a class="related-card" href="${TcmhMarket.escapeHTML(item.url)}" target="_blank" rel="noopener noreferrer">

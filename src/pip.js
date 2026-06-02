@@ -481,7 +481,6 @@
     const matches = term
       ? allItems()
           .filter((item) => itemMatchesSearch(item, term))
-          .slice(0, 12)
       : allItems().slice(0, 8);
 
     return `
