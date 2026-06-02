@@ -8,6 +8,7 @@ const FETCH_TIMEOUT_MS = 90 * 1000;
 const REMOTE_CACHE_BASE_URL = "https://the-classic-marketplace.vercel.app";
 const REMOTE_CACHE_API_KEY = "slfEiJRh2aaW8UpcATZJ7bktHHSVRfI0";
 const REMOTE_CACHE_ENABLED = true;
+const REMOTE_CACHE_LOG_PREFIX = "[TCMH Remote Cache]";
 let nextFetchAllowedAt = 0;
 let fetchThrottleQueue = Promise.resolve();
 
@@ -173,6 +174,15 @@ const slugKey = (item) =>
   `${item.game || "pw126"}:${item.item_id || item.q || "unknown"}`;
 const remoteCacheBaseUrl = () => REMOTE_CACHE_BASE_URL.replace(/\/+$/, "");
 
+const logRemoteCache = (message, details = null, level = "info") => {
+  const logger = (console[level] || console.info).bind(console);
+  if (details) {
+    logger(REMOTE_CACHE_LOG_PREFIX, message, details);
+    return;
+  }
+  logger(REMOTE_CACHE_LOG_PREFIX, message);
+};
+
 const remoteItemId = (item = {}, snapshot = null) =>
   String(item.item_id || snapshot?.stats?.latest?.item_id || "").trim();
 
@@ -223,57 +233,134 @@ const normalizeRemoteSnapshot = (item, remoteSnapshot) => {
 };
 
 const readRemoteCache = async (item) => {
-  if (!REMOTE_CACHE_ENABLED || !remoteItemId(item)) {
+  const itemId = remoteItemId(item);
+
+  if (!REMOTE_CACHE_ENABLED || !itemId) {
+    logRemoteCache("Busca no app ignorada.", {
+      enabled: REMOTE_CACHE_ENABLED,
+      itemKey: slugKey(item || {}),
+      reason: REMOTE_CACHE_ENABLED ? "item_id ausente" : "cache desativado",
+    });
     return null;
   }
 
   try {
-    const response = await fetch(
-      `${remoteCacheBaseUrl()}${remoteItemPath(item)}`,
-      {
-        method: "GET",
-        cache: "no-store",
-      },
-    );
+    const url = `${remoteCacheBaseUrl()}${remoteItemPath(item)}`;
+    logRemoteCache("Buscando item no app.", {
+      itemId,
+      itemKey: slugKey(item),
+      url,
+    });
+
+    const response = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+    });
 
     if (!response.ok) {
+      logRemoteCache(
+        "Busca no app retornou erro.",
+        {
+          itemId,
+          status: response.status,
+          statusText: response.statusText,
+        },
+        "warn",
+      );
       return null;
     }
 
     const payload = await response.json();
+    logRemoteCache("Resposta do app recebida.", {
+      itemId,
+      ok: Boolean(payload?.ok),
+      fresh: Boolean(payload?.data?.fresh),
+      needsRefresh: Boolean(payload?.data?.needsRefresh),
+      source: payload?.data?.source || "",
+    });
     return payload?.data || null;
-  } catch (_error) {
+  } catch (error) {
+    logRemoteCache(
+      "Falha ao buscar item no app.",
+      {
+        itemId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "warn",
+    );
     return null;
   }
 };
 
 const writeRemoteSnapshot = async (item, snapshot) => {
-  if (!REMOTE_CACHE_ENABLED || !remoteItemId(item, snapshot) || !snapshot?.ok) {
+  const itemId = remoteItemId(item, snapshot);
+
+  if (!REMOTE_CACHE_ENABLED || !itemId || !snapshot?.ok) {
+    logRemoteCache("Envio para o app ignorado.", {
+      enabled: REMOTE_CACHE_ENABLED,
+      itemId,
+      itemKey: slugKey(item || {}),
+      snapshotOk: Boolean(snapshot?.ok),
+      reason: !REMOTE_CACHE_ENABLED
+        ? "cache desativado"
+        : !itemId
+          ? "item_id ausente"
+          : "snapshot sem sucesso",
+    });
     return null;
   }
 
   try {
-    const response = await fetch(
-      `${remoteCacheBaseUrl()}${remoteItemPath(item, snapshot)}/snapshot`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-tcmh-api-key": REMOTE_CACHE_API_KEY,
-        },
-        body: JSON.stringify({
-          item: sanitizeRemoteItem(item, snapshot),
-          snapshot: sanitizeRemoteSnapshot(snapshot),
-        }),
+    const url = `${remoteCacheBaseUrl()}${remoteItemPath(item, snapshot)}/snapshot`;
+    logRemoteCache("Enviando snapshot para o app.", {
+      itemId,
+      itemKey: slugKey(item),
+      itemName: snapshot.itemName || item.item_name || item.q || "",
+      parserSource: snapshot.parserSource || "",
+      url,
+    });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-tcmh-api-key": REMOTE_CACHE_API_KEY,
       },
-    );
+      body: JSON.stringify({
+        item: sanitizeRemoteItem(item, snapshot),
+        snapshot: sanitizeRemoteSnapshot(snapshot),
+      }),
+    });
 
     if (!response.ok) {
+      logRemoteCache(
+        "Envio para o app retornou erro.",
+        {
+          itemId,
+          status: response.status,
+          statusText: response.statusText,
+        },
+        "warn",
+      );
       return null;
     }
 
-    return response.json();
-  } catch (_error) {
+    const payload = await response.json();
+    logRemoteCache("Snapshot enviado para o app.", {
+      itemId,
+      ok: Boolean(payload?.ok),
+      status: response.status,
+    });
+    return payload;
+  } catch (error) {
+    logRemoteCache(
+      "Falha ao enviar snapshot para o app.",
+      {
+        itemId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "warn",
+    );
     return null;
   }
 };
@@ -886,6 +973,13 @@ const fetchSnapshotForItemNow = async (item, settings) => {
   const itemKey = slugKey(item);
   const url = buildMarketUrl(item, settings);
 
+  logRemoteCache("Buscando item no painel do jogo.", {
+    itemKey,
+    itemId: remoteItemId(item),
+    itemName: itemDisplayName(item),
+    url,
+  });
+
   const controller = new AbortController();
   let timeoutId = null;
   const timeoutPromise = new Promise((_, reject) => {
@@ -920,6 +1014,13 @@ const fetchSnapshotForItemNow = async (item, settings) => {
   } finally {
     clearTimeout(timeoutId);
   }
+
+  logRemoteCache("Resposta do painel do jogo recebida.", {
+    itemKey,
+    status: response.status,
+    finalUrl: response.url || url,
+  });
+
   const snapshot = parseSnapshotFromHTML(html, {
     url: response.url || url,
     itemKey,
@@ -954,9 +1055,22 @@ const fetchSnapshotWithRemoteCache = async (item, settings) => {
   if (remote?.fresh && remote.snapshot) {
     const snapshot = normalizeRemoteSnapshot(item, remote.snapshot);
     if (snapshot?.ok) {
+      logRemoteCache("Cache remoto fresco encontrado. Usando snapshot do app.", {
+        itemKey: slugKey(item),
+        itemId: remoteItemId(item, snapshot),
+        capturedAt: snapshot.capturedAt,
+      });
       return snapshot;
     }
   }
+
+  logRemoteCache("Cache remoto ausente ou vencido. Buscando no painel.", {
+    itemKey: slugKey(item),
+    itemId: remoteItemId(item),
+    fresh: Boolean(remote?.fresh),
+    hasSnapshot: Boolean(remote?.snapshot),
+    needsRefresh: Boolean(remote?.needsRefresh),
+  });
 
   const snapshot = await fetchSnapshotForItemNow(item, settings);
   await writeRemoteSnapshot(item, snapshot);
