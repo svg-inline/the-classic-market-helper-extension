@@ -192,6 +192,24 @@ const remoteItemPath = (item, snapshot = null) => {
   return `/api/market/items/${game}/${itemId}`;
 };
 
+const normalizeRemoteSearchItem = (item = {}, fallbackGame = "pw126") => {
+  const itemId = String(item.item_id || item.itemId || item.id || "").trim();
+  const itemName = normalizeSpace(
+    item.item_name || item.itemName || item.name || "",
+  );
+
+  if (!itemId || !itemName) {
+    return null;
+  }
+
+  return {
+    game: item.game || item.game_key || fallbackGame || "pw126",
+    item_id: itemId,
+    item_name: itemName,
+    iconUrl: item.iconUrl || item.icon_url || "",
+  };
+};
+
 const sanitizeRemoteItem = (item = {}, snapshot = null) => ({
   game: item.game || "pw126",
   item_id: remoteItemId(item, snapshot),
@@ -230,6 +248,75 @@ const normalizeRemoteSnapshot = (item, remoteSnapshot) => {
     sourceUrl: remoteSnapshot?.source_url || raw.sourceUrl || buildMarketUrl(item),
     fromRemoteCache: true,
   };
+};
+
+const searchRemoteItems = async ({ game = "pw126", q = "", limit = 20 } = {}) => {
+  const term = normalizeSpace(q);
+
+  if (!REMOTE_CACHE_ENABLED || !term) {
+    logRemoteCache("Busca textual no app ignorada.", {
+      enabled: REMOTE_CACHE_ENABLED,
+      q: term,
+      reason: REMOTE_CACHE_ENABLED ? "termo ausente" : "cache desativado",
+    });
+    return [];
+  }
+
+  try {
+    const url = new URL("/api/market/search", remoteCacheBaseUrl());
+    url.searchParams.set("game", game || "pw126");
+    url.searchParams.set("q", term);
+    url.searchParams.set("limit", String(Math.max(1, Number(limit) || 20)));
+
+    logRemoteCache("Buscando texto no app.", {
+      game: game || "pw126",
+      q: term,
+      url: url.toString(),
+    });
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      logRemoteCache(
+        "Busca textual no app retornou erro.",
+        {
+          q: term,
+          status: response.status,
+          statusText: response.statusText,
+        },
+        "warn",
+      );
+      return [];
+    }
+
+    const payload = await response.json();
+    const items = Array.isArray(payload?.data?.items)
+      ? payload.data.items
+      : [];
+    const normalizedItems = items
+      .map((item) => normalizeRemoteSearchItem(item, game))
+      .filter(Boolean);
+
+    logRemoteCache("Busca textual no app recebida.", {
+      q: term,
+      ok: Boolean(payload?.ok),
+      total: normalizedItems.length,
+    });
+    return normalizedItems;
+  } catch (error) {
+    logRemoteCache(
+      "Falha na busca textual no app.",
+      {
+        q: term,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "warn",
+    );
+    return [];
+  }
 };
 
 const readRemoteCache = async (item) => {
@@ -1687,6 +1774,15 @@ const handleMessage = async (message) => {
     await storageSet({ settings });
     const alarm = await scheduleAlarm(settings);
     return { state: await getState(), alarm };
+  }
+
+  if (type === "SEARCH_REMOTE_ITEMS") {
+    const items = await searchRemoteItems({
+      game: message.game || "pw126",
+      q: message.q || "",
+      limit: message.limit || 20,
+    });
+    return { ok: true, items };
   }
 
   if (type === "REFRESH_ITEM") {

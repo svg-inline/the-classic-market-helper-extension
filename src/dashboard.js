@@ -295,6 +295,41 @@
 
     setText("itemSearchStatus", "Buscando item...");
 
+    if (!searchItem.item_id) {
+      const remoteSearchResponse = await sendMessage({
+        type: "SEARCH_REMOTE_ITEMS",
+        game: searchItem.game || "pw126",
+        q: term,
+        limit: 20,
+      });
+      const remoteMatches = relatedMatchesFromSearch(
+        remoteSearchResponse.items,
+        term,
+      );
+
+      if (remoteMatches.length > 1) {
+        const storedItems = await storeRelatedMatches(
+          searchItem,
+          remoteMatches,
+        );
+        selectedKey = storedItems[0] ? itemKey(storedItems[0]) : selectedKey;
+        setText(
+          "itemSearchStatus",
+          `${storedItems.length} resultados encontrados no app. Selecione o item correto no histórico.`,
+        );
+        render();
+        return;
+      }
+
+      if (remoteMatches.length === 1 && remoteMatches[0]?.item_id) {
+        const directItem = itemFromRelatedSearch(searchItem, remoteMatches[0]);
+        await refreshAndStoreItem(directItem);
+        setText("itemSearchStatus", "Resultado encontrado no app e carregado.");
+        render();
+        return;
+      }
+    }
+
     const refreshResponse = await sendMessage({
       type: "REFRESH_ITEM",
       item: searchItem,

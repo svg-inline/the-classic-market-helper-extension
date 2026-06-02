@@ -687,6 +687,37 @@
     render();
 
     try {
+      if (!searchItem.item_id) {
+        const remoteSearchResponse = await sendMessage({
+          type: "SEARCH_REMOTE_ITEMS",
+          game: searchItem.game || "pw126",
+          q: term,
+          limit: 20,
+        });
+        const remoteMatches = relatedMatchesFromSearch(
+          remoteSearchResponse.items,
+          term,
+        );
+
+        if (remoteMatches.length > 1) {
+          const storedItems = await storeRelatedMatches(
+            searchItem,
+            remoteMatches,
+          );
+          selectedKey = storedItems[0] ? itemKey(storedItems[0]) : selectedKey;
+          searchStatus = `${storedItems.length} resultados encontrados no app. Escolha o item correto.`;
+          return;
+        }
+
+        if (remoteMatches.length === 1 && remoteMatches[0]?.item_id) {
+          const directItem = itemFromRelatedSearch(searchItem, remoteMatches[0]);
+          await refreshAndStoreItem(directItem);
+          activeTab = "main";
+          searchStatus = "Resultado encontrado no app e carregado.";
+          return;
+        }
+      }
+
       const refreshResponse = await sendMessage({
         type: "REFRESH_ITEM",
         item: searchItem,
